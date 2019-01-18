@@ -1,0 +1,14 @@
+# Mac's .DS_Store
+*.DS_Store
+
+# .pyc files.
+*.pyc
+
+# data and results
+data
+results
+
+# Other irrelevant things
+*__pycache__*
+.vscode
+.python-version
