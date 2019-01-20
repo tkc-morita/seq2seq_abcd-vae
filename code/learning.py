@@ -3,7 +3,7 @@
 import torch
 from torchvision.transforms import Compose
 import numpy as np
-import model, data_utils
+from modules import model, data_utils
 from logging import getLogger,FileHandler,DEBUG,Formatter
 import os, argparse, random, itertools
 
