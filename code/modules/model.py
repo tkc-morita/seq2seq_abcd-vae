@@ -4,21 +4,21 @@ import torch
 import numpy as np
 
 class LSTM(torch.nn.Module):
-	def __init__(self, input_dims, lstm_hidden_size, num_layers=1, dropout = 0.0, is_decoder=False):
+	def __init__(self, input_dims, hidden_size, num_layers=1, dropout = 0.0, is_decoder=False):
 		super(LSTM, self).__init__()
 		self.num_layers = num_layers
 		self.drop = torch.nn.Dropout(dropout)
-		self.lstm_hidden_size = lstm_hidden_size
+		self.hidden_size = hidden_size
 		self.lstm = torch.nn.LSTM(
 						input_dims, # FFT output size
-						lstm_hidden_size,
+						hidden_size,
 						num_layers,
 						batch_first=True
 						)
 		self.is_decoder = is_decoder
 		if self.is_decoder:
-			self.feature2output = torch.nn.Linear(lstm_hidden_size, input_dims)
-			self.offset_detector = torch.nn.Linear(lstm_hidden_size, 2)
+			self.feature2output = torch.nn.Linear(hidden_size, input_dims)
+			self.offset_detector = torch.nn.Linear(hidden_size, 2)
 
 
 	def forward(self, packed_input, init_hidden):
@@ -45,8 +45,8 @@ class LSTM(torch.nn.Module):
 	def init_hidden(self, batch_size):
 		weight = next(self.parameters()).data
 		return (
-				torch.zeros(self.num_layers, batch_size, self.lstm_hidden_size), # Hidden state
-				torch.zeros(self.num_layers, batch_size, self.lstm_hidden_size) # Cell
+				torch.zeros(self.num_layers, batch_size, self.hidden_size), # Hidden state
+				torch.zeros(self.num_layers, batch_size, self.hidden_size) # Cell
 				)
 
 	def repackage_hidden(self, hidden):

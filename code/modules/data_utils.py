@@ -15,9 +15,13 @@ class Data_Parser(object):
 		self.input_root = input_root
 		self.data_type_col_name = data_type_col_name
 
-	def get_data(self, data_type, transform = None,):
+	def get_data(self, data_type = None, transform = None,):
+		if data_type is None:
+			sub_df = self.df_annotation.copy()
+		else:
+			sub_df = self.df_annotation[self.df_annotation[self.data_type_col_name]==data_type].reset_index(drop=True)
 		return Dataset(
-						self.df_annotation[self.df_annotation[self.data_type_col_name]==data_type].reset_index(drop=True),
+						sub_df,
 						self.input_root,
 						transform=transform,
 						)
@@ -40,11 +44,14 @@ class Dataset(torch.utils.data.Dataset):
 	def get_discrete_bounds(self):
 		for input_path,sub_df in self.df_annotation.groupby('input_path'):
 			fs, input_data = spw.read(os.path.join(self.input_root, input_path))
-			onset_ix = sub_df.onset.map(lambda sec: int(np.ceil(sec * fs)))
-			offset_ix = sub_df.offset.map(lambda sec: int(np.floor(sec * fs)))
+			onset_ix = sub_df.onset.map(lambda sec: np.ceil(sec * fs))
+			offset_ix = sub_df.offset.map(lambda sec: np.floor(sec * fs))
 			self.df_annotation.loc[sub_df.index, 'onset_ix'] = onset_ix
 			self.df_annotation.loc[sub_df.index, 'offset_ix'] = offset_ix
-			self.df_annotation.loc[sub_df.index, 'length'] = offset_ix - onset_ix
+			# self.df_annotation.loc[sub_df.index, 'length'] = offset_ix - onset_ix
+		self.df_annotation.loc[:, 'onset_ix'] = self.df_annotation.loc[:, 'onset_ix'].astype(int)
+		self.df_annotation.loc[:, 'offset_ix'] = self.df_annotation.loc[:, 'offset_ix'].astype(int)
+		self.df_annotation.loc[:, 'length'] = self.df_annotation.loc[:, 'offset_ix'] - self.df_annotation.loc[:, 'onset_ix']
 
 
 	def sort_by_length(self):
@@ -60,6 +67,8 @@ class Dataset(torch.utils.data.Dataset):
 		_, input_data = spw.read(os.path.join(self.input_root, input_path))
 		if input_data.ndim > 1:
 			input_data = input_data[:,0] # Use the 1st ch.
+		# print(('onset',self.df_annotation.loc[ix, 'onset_ix']))
+		# print(('offset',self.df_annotation.loc[ix, 'offset_ix']))
 		input_data = input_data[self.df_annotation.loc[ix, 'onset_ix']:self.df_annotation.loc[ix, 'offset_ix']].astype(np.float32)
 
 
@@ -142,7 +151,7 @@ class DataLoader(object):
 		batched_input = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(batched_input)
 		pseudo_input = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(pseudo_input)
 		is_offset = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(is_offset)
-		return batched_input, pseudo_input, is_offset
+		return batched_input, pseudo_input, is_offset, ixs
 
 	def get_num_batches(self):
 		return len(self.batches)

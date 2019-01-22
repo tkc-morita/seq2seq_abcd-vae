@@ -5,7 +5,7 @@ from torchvision.transforms import Compose
 import numpy as np
 from modules import model, data_utils
 from logging import getLogger,FileHandler,DEBUG,Formatter
-import os, argparse, random, itertools
+import os, argparse, itertools
 
 logger = getLogger(__name__)
 
@@ -57,7 +57,7 @@ class Learner(object):
 		self.decoder = model.LSTM(lstm_input_size, lstm_hidden_size, num_layers=num_layers, dropout=dropout, is_decoder=True)
 
 		if self.retrieval:
-			self.last_epoch = self.retrieve_model(device)
+			self.last_epoch = self.retrieve_model()
 			logger.info('Model retrieved.')
 		else:
 			logger.info('Random seed: {seed}'.format(seed = seed))
@@ -87,7 +87,7 @@ class Learner(object):
 
 		num_batches = dataloader.get_num_batches()
 
-		for batch_ix,(batched_input, pseudo_input, is_offset) in enumerate(dataloader, 1):
+		for batch_ix,(batched_input, pseudo_input, is_offset, _) in enumerate(dataloader, 1):
 			batched_input = batched_input.to(self.device)
 			pseudo_input = pseudo_input.to(self.device)
 			is_offset = is_offset.to(self.device)
@@ -132,14 +132,14 @@ class Learner(object):
 		num_batches = dataloader.get_num_batches()
 
 		with torch.no_grad():
-			for batch_ix, (batched_input, pseudo_input, is_offset) in enumerate(dataloader, 1):
+			for batch_ix, (batched_input, pseudo_input, is_offset, _) in enumerate(dataloader, 1):
 				batched_input = batched_input.to(self.device)
 				pseudo_input = pseudo_input.to(self.device)
 				is_offset = is_offset.to(self.device)
 
 				hidden = self.encoder.init_hidden(batched_input.batch_sizes[0])
 
-				hidden = self.encoder(pseudo_input, hidden)
+				hidden = self.encoder(batched_input, hidden)
 				flatten_prediction,_,flatten_offset_prediction = self.decoder(pseudo_input, hidden)
 
 				total_loss += torch.nn.MSELoss(reduction='sum')(
@@ -163,7 +163,7 @@ class Learner(object):
 
 
 	def learn(self, train_dataset, valid_dataset, num_epochs, batch_size_train, batch_size_valid, learning_rate=0.1, momentum= 0.9, gradient_clip = 0.25, patience=0):
-		train_dataloader = data_utils.DataLoader(train_dataset, batch_size=batch_size_train)
+		train_dataloader = data_utils.DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True)
 		valid_dataloader = data_utils.DataLoader(valid_dataset, batch_size=batch_size_valid)
 		if self.retrieval:
 			initial_epoch = self.last_epoch + 1
@@ -218,7 +218,7 @@ class Learner(object):
 		logger.info('Config successfully saved.')
 
 
-	def retrieve_model(self, device, dir_path = None):
+	def retrieve_model(self, dir_path = None):
 		if dir_path is None:
 			dir_path = self.save_dir
 		checkpoint = torch.load(os.path.join(dir_path, 'checkpoint.pt'))
@@ -246,8 +246,8 @@ def get_parameters():
 	par_parser.add_argument('annotation_file', type=str, help='Path to the annotation csv file.')
 	par_parser.add_argument('-e', '--epochs', type=int, default=40, help='# of epochs to train the model.')
 	par_parser.add_argument('-b', '--batch_size', type=int, default=10, help='Batch size for training.')
-	par_parser.add_argument('-l', '--learning_rate', type=float, default=0.1, help='Initial learning rate.')
-	par_parser.add_argument('-M', '--momentum', type=float, default=0.9, help='Momentum for the storchastic gradient descent.')
+	par_parser.add_argument('-l', '--learning_rate', type=float, default=1.0, help='Initial learning rate.')
+	par_parser.add_argument('-M', '--momentum', type=float, default=0.0, help='Momentum for the storchastic gradient descent.')
 	par_parser.add_argument('-c', '--clip', type=float, default=0.25, help='Gradient clipping rate.')
 	par_parser.add_argument('-D', '--dropout', type=float, default=0.0, help='Dropout rate.')
 	par_parser.add_argument('--validation_batch_size', type=int, default=None, help='Batch size for validation. Same as for training b y default.')
@@ -257,8 +257,8 @@ def get_parameters():
 	par_parser.add_argument('-s', '--seed', type=int, default=1111, help='random seed')
 	par_parser.add_argument('-d', '--device', type=str, default='cpu', help='Computing device.')
 	par_parser.add_argument('-S', '--save_root', type=str, default=None, help='Path to the directory where results are saved.')
-	par_parser.add_argument('--fft_frame_length', type=float, default=0.025, help='FFT frame length in sec.')
-	par_parser.add_argument('--fft_step_size', type=float, default=0.010, help='FFT step size in sec.')
+	par_parser.add_argument('--fft_frame_length', type=float, default=0.008, help='FFT frame length in sec.')
+	par_parser.add_argument('--fft_step_size', type=float, default=0.004, help='FFT step size in sec.')
 	par_parser.add_argument('--fft_window_type', type=str, default='hann_window', help='Window type for FFT. "hann_window" by default.')
 	par_parser.add_argument('--fft_no_centering', action='store_true', help='If selected, no centering in FFT.')
 	par_parser.add_argument('-p', '--patience', type=int, default=0, help='# of epochs before updating the learning rate.')
@@ -309,8 +309,8 @@ if __name__ == '__main__':
 	logger.info("STFT step size: {fft_step_size_in_sec} sec".format(fft_step_size_in_sec=parameters.fft_step_size))
 
 
-	train_dataset = data_parser.get_data('train', transform=Compose([to_tensor,stft]))
-	valid_dataset = data_parser.get_data('valid', transform=Compose([to_tensor,stft]))
+	train_dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft]))
+	valid_dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft]))
 
 
 	if parameters.validation_batch_size is None:
