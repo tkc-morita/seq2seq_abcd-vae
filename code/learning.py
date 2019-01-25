@@ -33,7 +33,7 @@ def update_log_handler(file_dir):
 
 
 class Learner(object):
-	def __init__(self, lstm_input_size, lstm_hidden_size, save_dir, num_layers=1, dropout = 0.5, device=False, seed=1111):
+	def __init__(self, input_size, rnn_hidden_size, mlp_hidden_size, feature_size, save_dir, rnn_type='GRU', rnn_layers=1, bidirectional_encoder=True, dropout = 0.5, device=False, seed=1111, feature_distribution='isotropic_gaussian', emission_distribution='isotropic_gaussian', decoder_self_feedback=True):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
 		if not self.retrieval:
 			torch.manual_seed(seed)
@@ -43,7 +43,7 @@ class Learner(object):
 				else:
 					print('CUDA is available. Restart with option -C or --cuda to activate it.')
 
-		self.mse_loss = torch.nn.MSELoss(reduction='sum')
+		# self.emission_loss = torch.nn.MSELoss(reduction='sum')
 		self.cross_entropy_loss = torch.nn.CrossEntropyLoss(reduction='sum')
 
 		self.save_dir = save_dir
@@ -53,24 +53,28 @@ class Learner(object):
 
 		
 
-		self.encoder = model.LSTM(lstm_input_size, lstm_hidden_size, num_layers=num_layers, dropout=dropout)
-		self.decoder = model.LSTM(lstm_input_size, lstm_hidden_size, num_layers=num_layers, dropout=dropout, is_decoder=True)
-
 		if self.retrieval:
 			self.last_epoch = self.retrieve_model()
 			logger.info('Model retrieved.')
 		else:
+			self.feature_distribution = feature_distribution
+			self.emission_distribution =  emission_distribution
+			self.feature_sampler, _, self.kl_func = model.choose_distribution(feature_distribution)
+			emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
+			self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, dropout=dropout, bidirectional=bidirectional_encoder)
+			self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, emission_sampler=emission_sampler, self_feedback=decoder_self_feedback)
+			self.bag_of_data_decoder = model.MLP_To_2_Vecs(feature_size, mlp_hidden_size, input_size) # Analogous to Zhao et al.'s (2017) "bag-of-words MLP".
+			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
+			logger.info('Features are assumed to be distributed according to {feature_distribution}.'.format(feature_distribution=feature_distribution))
 			logger.info('Random seed: {seed}'.format(seed = seed))
-			logger.info("# of hidden layers: {hl}".format(hl=num_layers))
+			logger.info("# of hidden layers: {hl}".format(hl=rnn_layers))
 			logger.info("Dropout rate: {do}".format(do=dropout))
 
-			# logger.info("Sampling frequency of data: {fs}".format(fs=fs))
-			# logger.info("STFT window type: {fft_window}".format(fft_window=fft_window))
-			# logger.info("STFT frame lengths: {fft_frame_length_in_sec} sec".format(fft_frame_length_in_sec=fft_frame_length_in_sec))
-			# logger.info("STFT step size: {fft_step_size_in_sec} sec".format(fft_step_size_in_sec=fft_step_size_in_sec))
 
 		self.encoder.to(self.device)
 		self.decoder.to(self.device)
+		self.bag_of_data_decoder.to(self.device)
+		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters(), self.bag_of_data_decoder.parameters())
 
 
 
@@ -81,42 +85,60 @@ class Learner(object):
 		"""
 		self.encoder.train() # Turn on training mode which enables dropout.
 		self.decoder.train()
+		self.bag_of_data_decoder.train()
 
-		total_loss = 0
+		emission_loss = 0
+		emission_loss_BOD = 0
+		cross_entropy_loss = 0
+		neg_kl = 0
 		data_size = 0
 
 		num_batches = dataloader.get_num_batches()
 
-		for batch_ix,(batched_input, pseudo_input, is_offset, _) in enumerate(dataloader, 1):
+		for batch_ix,(batched_input, is_offset, _) in enumerate(dataloader, 1):
 			batched_input = batched_input.to(self.device)
-			pseudo_input = pseudo_input.to(self.device)
 			is_offset = is_offset.to(self.device)
-
-			hidden = self.encoder.init_hidden(batched_input.batch_sizes[0])
 
 			self.optimizer.zero_grad()
 
-			hidden = self.encoder(batched_input, hidden)
-			flatten_prediction,_,flatten_offset_prediction = self.decoder(pseudo_input, hidden)
+			feature_params = self.encoder(batched_input)
+			features = self.feature_sampler(*feature_params)
+			padded_input, lengths = torch.nn.utils.rnn.pad_packed_sequence(batched_input, batch_first=True)
+			emission_params,flatten_offset_prediction = self.decoder(features, lengths)
+			emission_params_BOD = self.bag_of_data_decoder(features)
+			emission_params_BOD = (torch.nn.utils.rnn.pack_sequence([p[ix].expand(l,-1) for ix,l in enumerate(lengths)]).data
+									for p in emission_params_BOD) # Can/should be .expand() rather than .repeat() for aurograd. cf. https://discuss.pytorch.org/t/torch-repeat-and-torch-expand-which-to-use/27969
 
-			loss = self.mse_loss(flatten_prediction, batched_input.data)
-			loss += self.cross_entropy_loss(flatten_offset_prediction, is_offset.data)
+			emission_loss_per_batch = -self.log_pdf_emission(batched_input.data, *emission_params)
+			emission_loss_BOD_per_batch = -self.log_pdf_emission(batched_input.data, *emission_params_BOD)
+			cross_entropy_loss_per_batch = self.cross_entropy_loss(flatten_offset_prediction, is_offset.data)
+			neg_kl_per_batch = -self.kl_func(*feature_params)
+			loss = emission_loss_per_batch + cross_entropy_loss_per_batch + neg_kl_per_batch + emission_loss_BOD_per_batch
 			loss.backward()
 
-			# `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-			torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), self.gradient_clip)
-			torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), self.gradient_clip)
+			# `clip_grad_norm` helps prevent the exploding gradient problem in RNNs.
+			torch.nn.utils.clip_grad_norm_(self.parameters(), self.gradient_clip)
 
 			self.optimizer.step()
 
-			total_loss += loss.item()
+			emission_loss += emission_loss_per_batch.item()
+			emission_loss_BOD += emission_loss_BOD_per_batch.item()
+			cross_entropy_loss += cross_entropy_loss_per_batch.item()
+			neg_kl += neg_kl_per_batch.item()
 			data_size += batched_input.batch_sizes.sum().item()
 
 			logger.info('{batch_ix}/{num_batches} training batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
 
-		mean_loss = total_loss / data_size
-		logger.info('mean training loss: {:5.2f}'.format(mean_loss))
-		# logger.info('training perplexity: {:8.2f}'.format(np.exp(mean_loss)))
+		emission_loss /= data_size
+		emission_loss_BOD /= data_size
+		cross_entropy_loss /= data_size
+		neg_kl /= len(dataloader.dataset)
+		mean_loss = emission_loss + emission_loss_BOD + cross_entropy_loss + neg_kl
+		logger.info('mean training emission loss (ORDERED): {:5.4f}'.format(emission_loss))
+		logger.info('mean training emission loss (BAG-OF-DATA): {:5.4f}'.format(emission_loss_BOD))
+		logger.info('mean training cross-entropy loss: {:5.4f}'.format(cross_entropy_loss))
+		logger.info('mean training negative KL: {:5.4f}'.format(neg_kl))
+		logger.info('mean training total loss: {:5.4f}'.format(mean_loss))
 
 
 	def test_or_validate(self, dataloader):
@@ -125,38 +147,52 @@ class Learner(object):
 		"""
 		self.encoder.eval() # Turn on evaluation mode which disables dropout.
 		self.decoder.eval()
+		self.bag_of_data_decoder.eval()
 
-		total_loss = 0
+		emission_loss = 0
+		emission_loss_BOD = 0
+		cross_entropy_loss = 0
+		neg_kl = 0
 		data_size = 0
 
 		num_batches = dataloader.get_num_batches()
 
 		with torch.no_grad():
-			for batch_ix, (batched_input, pseudo_input, is_offset, _) in enumerate(dataloader, 1):
+			for batch_ix, (batched_input, is_offset, _) in enumerate(dataloader, 1):
 				batched_input = batched_input.to(self.device)
-				pseudo_input = pseudo_input.to(self.device)
 				is_offset = is_offset.to(self.device)
 
-				hidden = self.encoder.init_hidden(batched_input.batch_sizes[0])
+				feature_params = self.encoder(batched_input)
+				features = self.feature_sampler(*feature_params)
+				_, lengths = torch.nn.utils.rnn.pad_packed_sequence(batched_input, batch_first=True)
+				emission_params,flatten_offset_prediction = self.decoder(features, lengths)
+				emission_params_BOD = self.bag_of_data_decoder(features)
+				emission_params_BOD = (torch.nn.utils.rnn.pack_sequence([p[ix].expand(l,-1) for ix,l in enumerate(lengths)]).data
+										for p in emission_params_BOD) # Should be .expand() rather than .repeat() for aurograd(?).
 
-				hidden = self.encoder(batched_input, hidden)
-				flatten_prediction,_,flatten_offset_prediction = self.decoder(pseudo_input, hidden)
 
-				total_loss += torch.nn.MSELoss(reduction='sum')(
-											flatten_prediction,
-											batched_input.data
-											).item()
-				total_loss += torch.nn.CrossEntropyLoss(reduction='sum')(
+				emission_loss += -self.log_pdf_emission(batched_input.data, *emission_params).item()
+				emission_loss_BOD += -self.log_pdf_emission(batched_input.data, *emission_params_BOD).item()
+				cross_entropy_loss += torch.nn.CrossEntropyLoss(reduction='sum')(
 												flatten_offset_prediction,
 												is_offset.data
 											).item()
+				neg_kl += -self.kl_func(*feature_params).item()
 				data_size += batched_input.batch_sizes.sum().item()
 
 				logger.info('{batch_ix}/{num_batches} validation batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
 
-		mean_loss = total_loss / data_size # Average loss
-		logger.info('mean validation loss: {:5.2f}'.format(mean_loss))
-		# logger.info('validation perplexity: {:8.2f}'.format(np.exp(mean_loss)))
+
+		emission_loss /= data_size
+		emission_loss_BOD /= data_size
+		cross_entropy_loss /= data_size
+		neg_kl /= len(dataloader.dataset)
+		mean_loss = emission_loss + emission_loss_BOD + cross_entropy_loss + neg_kl
+		logger.info('mean validation emission loss (ORDERED): {:5.4f}'.format(emission_loss))
+		logger.info('mean validation emission loss (BAG-OF-DATA): {:5.4f}'.format(emission_loss_BOD))
+		logger.info('mean validation cross-entropy loss: {:5.4f}'.format(cross_entropy_loss))
+		logger.info('mean validation negative KL: {:5.4f}'.format(neg_kl))
+		logger.info('mean validation total loss: {:5.4f}'.format(mean_loss))
 		return mean_loss
 
 
@@ -169,7 +205,7 @@ class Learner(object):
 			initial_epoch = self.last_epoch + 1
 			logger.info('To be restarted from the beginning of epoch #: {epoch}'.format(epoch=initial_epoch))
 		else:
-			self.optimizer = torch.optim.SGD(itertools.chain(self.encoder.parameters(), self.decoder.parameters()), lr=learning_rate, momentum=momentum)
+			self.optimizer = torch.optim.SGD(self.parameters(), lr=learning_rate, momentum=momentum)
 			self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, patience=patience)
 			logger.info("START LEARNING.")
 			logger.info("max # of epochs: {ep}".format(ep=num_epochs))
@@ -210,23 +246,57 @@ class Learner(object):
 			'epoch':epoch,
 			'encoder':self.encoder.state_dict(),
 			'decoder':self.decoder.state_dict(),
+			'bag_of_data_decoder':self.bag_of_data_decoder.state_dict(),
 			'optimizer':self.optimizer.state_dict(),
 			'lr_scheduler':self.lr_scheduler.state_dict(),
-			'gradient_clip':self.gradient_clip
+			'gradient_clip':self.gradient_clip,
+			'input_size':self.encoder.rnn.rnn.input_size,
+			'rnn_type':self.encoder.rnn.rnn.mode,
+			'rnn_hidden_size':self.encoder.rnn.rnn.hidden_size,
+			'rnn_layers':self.encoder.rnn.rnn.num_layers,
+			'bidirectional_encoder':self.encoder.rnn.rnn.bidirectional,
+			'mlp_hidden_size':self.encoder.to_parameters.mlp1.hidden_size,
+			'feature_size':self.decoder.feature2hidden.in_features,
+			'decoder_self_feedback':self.decoder.self_feedback,
+			'feature_distribution':self.feature_distribution,
+			'emission_distribution':self.emission_distribution
 		}
 		torch.save(checkpoint, os.path.join(self.save_dir, 'checkpoint.pt'))
 		logger.info('Config successfully saved.')
 
 
-	def retrieve_model(self, dir_path = None):
-		if dir_path is None:
-			dir_path = self.save_dir
-		checkpoint = torch.load(os.path.join(dir_path, 'checkpoint.pt'))
+	def retrieve_model(self, checkpoint_path = None):
+		if checkpoint_path is None:
+			checkpoint_path = os.path.join(self.save_dir, 'checkpoint.pt')
+		checkpoint = torch.load(checkpoint_path)
 
+		input_size = checkpoint['input_size']
+		rnn_type = checkpoint['rnn_type']
+		rnn_hidden_size = checkpoint['rnn_hidden_size']
+		rnn_layers = checkpoint['rnn_layers']
+		bidirectional_encoder = checkpoint['bidirectional_encoder']
+		feature_size = checkpoint['feature_size']
+		mlp_hidden_size = checkpoint['mlp_hidden_size']
+		decoder_self_feedback = checkpoint['decoder_self_feedback']
+
+		self.feature_distribution = checkpoint['feature_distribution']
+		self.emission_distribution = checkpoint['emission_distribution']
+		self.feature_sampler,_,self.kl_func = model.choose_distribution(self.feature_distribution)
+		emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
+
+		self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, bidirectional=bidirectional_encoder)
+		self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, emission_sampler=emission_sampler, self_feedback=decoder_self_feedback)
+		self.bag_of_data_decoder = model.MLP_To_2_Vecs(feature_size, mlp_hidden_size, input_size)
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
+		self.bag_of_data_decoder.load_state_dict(checkpoint['bag_of_data_decoder'])
 
-		self.optimizer = torch.optim.SGD(itertools.chain(self.encoder.parameters(), self.decoder.parameters()), lr=0.1)
+
+			
+
+
+		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters(), self.bag_of_data_decoder.parameters())
+		self.optimizer = torch.optim.SGD(self.parameters(), lr=0.1)
 		self.optimizer.load_state_dict(checkpoint['optimizer'])
 
 		self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer)
@@ -247,12 +317,16 @@ def get_parameters():
 	par_parser.add_argument('-e', '--epochs', type=int, default=40, help='# of epochs to train the model.')
 	par_parser.add_argument('-b', '--batch_size', type=int, default=10, help='Batch size for training.')
 	par_parser.add_argument('-l', '--learning_rate', type=float, default=1.0, help='Initial learning rate.')
+	par_parser.add_argument('-f', '--feature_size', type=int, default=13, help='# of dimensions of features into which data are encoded.')
 	par_parser.add_argument('-M', '--momentum', type=float, default=0.0, help='Momentum for the storchastic gradient descent.')
 	par_parser.add_argument('-c', '--clip', type=float, default=0.25, help='Gradient clipping rate.')
 	par_parser.add_argument('-D', '--dropout', type=float, default=0.0, help='Dropout rate.')
 	par_parser.add_argument('--validation_batch_size', type=int, default=None, help='Batch size for validation. Same as for training b y default.')
-	par_parser.add_argument('--layers', type=int, default=1, help='# of hidden layers.')
-	par_parser.add_argument('--hidden_size', type=int, default=100, help='# of features in the hidden state of LSTM.')
+	par_parser.add_argument('-R', '--rnn_type', type=str, default='GRU', help='Name of RNN to be used.')
+	par_parser.add_argument('--rnn_layers', type=int, default=1, help='# of hidden layers.')
+	par_parser.add_argument('--rnn_hidden_size', type=int, default=100, help='# of the RNN units.')
+	par_parser.add_argument('--mlp_hidden_size', type=int, default=200, help='# of neurons in the hidden layer of the MLP transforms.')
+	par_parser.add_argument('--greedy_decoder', action='store_true', help='If selected, decoder becomes greedy and will not receive self-feedback.')
 	par_parser.add_argument('-j', '--job_id', type=str, default='NO_JOB_ID', help='Job ID. For users of computing clusters.')
 	par_parser.add_argument('-s', '--seed', type=int, default=1111, help='random seed')
 	par_parser.add_argument('-d', '--device', type=str, default='cpu', help='Computing device.')
@@ -293,12 +367,16 @@ if __name__ == '__main__':
 	# Get a model.
 	learner = Learner(
 				fft_frame_length + 2,
-				parameters.hidden_size,
+				parameters.rnn_hidden_size,
+				parameters.mlp_hidden_size,
+				parameters.feature_size,
 				save_dir,
-				num_layers=parameters.layers,
+				rnn_type=parameters.rnn_type,
+				rnn_layers=parameters.rnn_layers,
 				dropout=parameters.dropout,
 				device = parameters.device,
-				seed = parameters.seed
+				seed = parameters.seed,
+				decoder_self_feedback=not parameters.greedy_decoder
 				)
 
 	to_tensor = data_utils.ToTensor()

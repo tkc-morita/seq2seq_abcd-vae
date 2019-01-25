@@ -140,18 +140,18 @@ class DataLoader(object):
 		ixs = self.batches[self._counter]
 		self._counter += 1
 		batched_input = []
-		pseudo_input = [] # Input for the decoder.
+		# pseudo_input = [] # Input for the decoder.
 		is_offset = []
 		for ix in ixs:
 			seq = self.dataset[ix]
 			batched_input.append(seq)
-			pseudo_input.append(torch.zeros_like(seq))
+			# pseudo_input.append(torch.zeros_like(seq))
 			l = seq.size(0)
 			is_offset.append(torch.tensor([0]*(l-1)+[1]))
 		batched_input = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(batched_input)
-		pseudo_input = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(pseudo_input)
+		# pseudo_input = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(pseudo_input)
 		is_offset = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(is_offset)
-		return batched_input, pseudo_input, is_offset, ixs
+		return batched_input, is_offset, ixs
 
 	def get_num_batches(self):
 		return len(self.batches)
