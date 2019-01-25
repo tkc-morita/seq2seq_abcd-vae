@@ -1,6 +1,6 @@
-# LSTM AUDIO AUTOENCODER
+# RNN Audio Variational Autoencoder
 
-This is a PyTorch-implementation of an LSTM seq2seq autoencoder (AE).
+This is a PyTorch-implementation of an RNN seq2seq variational autoencoder (RNN-VAE).
 
 ## Dependencies
 
@@ -37,7 +37,12 @@ DESCRIPTION TO BE ADDED HERE.
 
 ### Encoding
 
-UNDER CONSTRUCTION.
+```bash
+python code/encode.py /path/to/directory/containing/learning_results /path/to/directory/containing/wavs /path/to/annotation.csv [options]
+```
+
+Options:
+DESCRIPTION TO BE ADDED HERE.
 
 ### Decoding
 
@@ -46,5 +51,4 @@ UNDER CONSTRUCTION.
 ## TODOs
 
 - Check CUDA (10) compatibility.
-- Implement post-learning encoder.
 - Implement post-learning decoder.
