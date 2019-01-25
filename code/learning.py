@@ -90,7 +90,7 @@ class Learner(object):
 		emission_loss = 0
 		emission_loss_BOD = 0
 		cross_entropy_loss = 0
-		neg_kl = 0
+		kl_loss = 0
 		data_size = 0
 
 		num_batches = dataloader.get_num_batches()
@@ -112,8 +112,8 @@ class Learner(object):
 			emission_loss_per_batch = -self.log_pdf_emission(batched_input.data, *emission_params)
 			emission_loss_BOD_per_batch = -self.log_pdf_emission(batched_input.data, *emission_params_BOD)
 			cross_entropy_loss_per_batch = self.cross_entropy_loss(flatten_offset_prediction, is_offset.data)
-			neg_kl_per_batch = -self.kl_func(*feature_params)
-			loss = emission_loss_per_batch + cross_entropy_loss_per_batch + neg_kl_per_batch + emission_loss_BOD_per_batch
+			kl_loss_per_batch = self.kl_func(*feature_params)
+			loss = emission_loss_per_batch + cross_entropy_loss_per_batch + kl_loss_per_batch + emission_loss_BOD_per_batch
 			loss.backward()
 
 			# `clip_grad_norm` helps prevent the exploding gradient problem in RNNs.
@@ -124,7 +124,7 @@ class Learner(object):
 			emission_loss += emission_loss_per_batch.item()
 			emission_loss_BOD += emission_loss_BOD_per_batch.item()
 			cross_entropy_loss += cross_entropy_loss_per_batch.item()
-			neg_kl += neg_kl_per_batch.item()
+			kl_loss += kl_loss_per_batch.item()
 			data_size += batched_input.batch_sizes.sum().item()
 
 			logger.info('{batch_ix}/{num_batches} training batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
@@ -132,12 +132,12 @@ class Learner(object):
 		emission_loss /= data_size
 		emission_loss_BOD /= data_size
 		cross_entropy_loss /= data_size
-		neg_kl /= len(dataloader.dataset)
-		mean_loss = emission_loss + emission_loss_BOD + cross_entropy_loss + neg_kl
-		logger.info('mean training emission loss (ORDERED): {:5.4f}'.format(emission_loss))
-		logger.info('mean training emission loss (BAG-OF-DATA): {:5.4f}'.format(emission_loss_BOD))
+		kl_loss /= len(dataloader.dataset)
+		mean_loss = emission_loss + emission_loss_BOD + cross_entropy_loss + kl_loss
+		logger.info('mean training emission negative pdf loss (ORDERED): {:5.4f}'.format(emission_loss))
+		logger.info('mean training emission negative pdf loss (BAG-OF-DATA): {:5.4f}'.format(emission_loss_BOD))
 		logger.info('mean training cross-entropy loss: {:5.4f}'.format(cross_entropy_loss))
-		logger.info('mean training negative KL: {:5.4f}'.format(neg_kl))
+		logger.info('mean training KL: {:5.4f}'.format(kl_loss))
 		logger.info('mean training total loss: {:5.4f}'.format(mean_loss))
 
 
@@ -152,7 +152,7 @@ class Learner(object):
 		emission_loss = 0
 		emission_loss_BOD = 0
 		cross_entropy_loss = 0
-		neg_kl = 0
+		kl_loss = 0
 		data_size = 0
 
 		num_batches = dataloader.get_num_batches()
@@ -177,7 +177,7 @@ class Learner(object):
 												flatten_offset_prediction,
 												is_offset.data
 											).item()
-				neg_kl += -self.kl_func(*feature_params).item()
+				kl_loss += self.kl_func(*feature_params).item()
 				data_size += batched_input.batch_sizes.sum().item()
 
 				logger.info('{batch_ix}/{num_batches} validation batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
@@ -186,12 +186,12 @@ class Learner(object):
 		emission_loss /= data_size
 		emission_loss_BOD /= data_size
 		cross_entropy_loss /= data_size
-		neg_kl /= len(dataloader.dataset)
-		mean_loss = emission_loss + emission_loss_BOD + cross_entropy_loss + neg_kl
-		logger.info('mean validation emission loss (ORDERED): {:5.4f}'.format(emission_loss))
-		logger.info('mean validation emission loss (BAG-OF-DATA): {:5.4f}'.format(emission_loss_BOD))
+		kl_loss /= len(dataloader.dataset)
+		mean_loss = emission_loss + emission_loss_BOD + cross_entropy_loss + kl_loss
+		logger.info('mean validation emission negative pdf loss (ORDERED): {:5.4f}'.format(emission_loss))
+		logger.info('mean validation emission negative pdf loss (BAG-OF-DATA): {:5.4f}'.format(emission_loss_BOD))
 		logger.info('mean validation cross-entropy loss: {:5.4f}'.format(cross_entropy_loss))
-		logger.info('mean validation negative KL: {:5.4f}'.format(neg_kl))
+		logger.info('mean validation KL: {:5.4f}'.format(kl_loss))
 		logger.info('mean validation total loss: {:5.4f}'.format(mean_loss))
 		return mean_loss
 
