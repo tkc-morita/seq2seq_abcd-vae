@@ -75,59 +75,46 @@ class RNN_Variational_Decoder(torch.nn.Module):
 	Kingma and Willing 2014. Auto-Encoding Variational Bayes.
 	Bowman et al. 2016. Generating Sentences from a Continuous Space.
 	"""
-	def __init__(self, output_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type='GRU', rnn_layers=1, self_feedback = True, dropout = 0.0, emission_sampler = None):
+	def __init__(self, output_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type='GRU', rnn_layers=1, dropout = 0.0, emission_sampler = None, self_feedback=True):
 		super(RNN_Variational_Decoder, self).__init__()
+		if not self_feedback:
+			dropout = 1.0
 		hidden_size_total = rnn_layers*rnn_hidden_size
 		if rnn_type=='LSTM':
 			hidden_size_total *= 2
+			self.get_output = lambda hidden: hidden[0]
+			self.reshape_hidden = lambda hidden: self._split_into_hidden_and_cell(self._reshape_hidden(hidden, (-1, rnn_hidden_size, 2)))
+			self.shrink_hidden = lambda hidden, batch_size: (hidden[0][:batch_size], hidden[1][:batch_size])
+		else:
+			self.get_output = lambda hidden: hidden
+			self.reshape_hidden = lambda hidden: self._reshape_hidden(hidden, (-1, rnn_hidden_size))
+			self.shrink_hidden = lambda hidden, batch_size: hidden[:batch_size]
 		self.feature2hidden = torch.nn.Linear(feature_size, hidden_size_total)
 		self.to_parameters = MLP_To_2_Vecs(rnn_hidden_size, mlp_hidden_size, output_size)
 		self.offset_predictor = torch.nn.Linear(rnn_hidden_size, 2)
-		self.self_feedback = self_feedback
-		self.reshape_hidden = self._get_reshape_hidden(rnn_type, self_feedback, rnn_layers, rnn_hidden_size)
-		if self_feedback:
-			assert rnn_layers==1, 'Only rnn_layers=1 is currently supported.'
-			assert not emission_sampler is None, 'emission_sampler must be provided.'
-			self.emission_sampler = emission_sampler
-			self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, dropout=dropout)
-			self.decode = self.rnn_with_self_feedback
-			if rnn_type=='LSTM':
-				self.get_output = lambda hidden: hidden[0]
-			else:
-				self.get_output = lambda hidden: hidden
-		else:
-			self.rnn = RNN(1, rnn_hidden_size, num_layers=rnn_layers, model_type=rnn_type)
-			self.decode = self.rnn_WO_self_feedback
+		assert rnn_layers==1, 'Only rnn_layers=1 is currently supported.'
+		assert not emission_sampler is None, 'emission_sampler must be provided.'
+		self.emission_sampler = emission_sampler
+		self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, dropout=dropout)
 
-
-	def forward(self, features, lengths):
+	def forward(self, features, lengths, device):
 		"""
 		The output is "flatten", meaning that it's PackedSequence.data.
 		This should be sufficient for the training purpose etc. while we can avoid padding, which would affect the autograd and thus requires masking in the loss calculation.
 		"""
 		hidden = self.feature2hidden(features)
 		hidden = self.reshape_hidden(hidden)
-		flatten_emission_params, flatten_offset_weights = self.decode(hidden, lengths)
-		return flatten_emission_params, flatten_offset_weights
 
-	def rnn_WO_self_feedback(self, init_hidden, lengths):
-		null_input = torch.nn.utils.rnn.pack_padded_sequence(torch.zeros((lengths.size(0),lengths.max().item(),1)), lengths, batch_first=True)
-		packed_output, _ = self.rnn(null_input, init_hidden)
-		flatten_rnn_out = packed_output.data
-		flatten_emission_params = self.to_parameters(flatten_rnn_out)
-		flatten_offset_weights = self.offset_predictor(flatten_rnn_out)
-		return flatten_emission_params, flatten_offset_weights
-
-	def rnn_with_self_feedback(self, hidden, lengths):
+		# Manual implementation of RNNs based on RNNCell.
 		batch_sizes = self._length_to_batch_sizes(lengths)
+		flatten_rnn_out = torch.tensor([]).to(device) # Correspond to PackedSequence.data.
+		flatten_emission_param1 = torch.tensor([]).to(device)
+		flatten_emission_param2 = torch.tensor([]).to(device)
 		# last_hidden = torch.tensor([])
-		flatten_rnn_out = torch.tensor([]) # Correspond to PackedSequence.data.
-		flatten_emission_param1 = torch.tensor([])
-		flatten_emission_param2 = torch.tensor([])
-		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size)
+		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(device)
 		for bs in batch_sizes:
 			# last_hidden = torch.cat([hidden[bs:],last_hidden], dim=0) # hidden[bs:] is non-empty only if hidden.size(0) > bs.
-			hidden = self.rnn_cell(batched_input[:bs])
+			hidden = self.rnn_cell(batched_input[:bs], self.shrink_hidden(hidden,bs))
 			rnn_out = self.get_output(hidden)
 			emission_param1,emission_param2 = self.to_parameters(rnn_out)
 			batched_input = self.emission_sampler(emission_param1, emission_param2)
@@ -136,36 +123,14 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			flatten_emission_param2 = torch.cat([flatten_emission_param2, emission_param2], dim=0)
 		# last_hidden = torch.cat([hidden,last_hidden], dim=0)
 		flatten_offset_weights = self.offset_predictor(flatten_rnn_out)
-		return (flatten_emission_param1,flatten_emission_param2), flatten_rnn_out
+		return (flatten_emission_param1,flatten_emission_param2), flatten_offset_weights
 
-	def _get_reshape_hidden(self, rnn_type, self_feedback, rnn_layers, rnn_hidden_size):
-		def transpose_batch_and_layer_dims(reshape_hidden):
-			"""
-			reshape_hidden: num_batches x rnn_layers x rnn_hidden_size (x 2 if LSTM).
-			"""
-			return reshape_hidden.transpose(0,1).contiguous()
-		def split_into_hidden_and_cell(reshaped_hidden):
-			return (hidden[...,0],hidden[...,1])
-		
-		view_shape = [-1]
-		operations = []
-		if not self_feedback:
-			view_shape.append(rnn_layers)
-			operations.append(transpose_batch_and_layer_dims)
-		view_shape.append(rnn_hidden_size)
-		if rnn_type=='LSTM':
-			view_shape.append(2)
-			operations.append(split_into_hidden_and_cell)
-		
-		def reshape_hidden_base(hidden):
-			return hidden.view(view_shape)
 
-		operations = [reshape_hidden_base]+operations
-		def reshape_hidden(hidden):
-			for op in operations:
-				hidden = op(hidden)
-		return reshape_hidden
+	def _split_into_hidden_and_cell(self, reshaped_hidden):
+		return (reshaped_hidden[...,0],reshaped_hidden[...,1])
 
+	def _reshape_hidden(self, hidden, view_shape):
+		return hidden.view(view_shape)
 
 	def _length_to_batch_sizes(self, lengths):
 		batch_sizes = [(lengths>t).sum() for t in range(lengths.max())]

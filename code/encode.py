@@ -85,7 +85,7 @@ if __name__ == '__main__':
 	encoder = Encoder(parameters.model_dir, device=parameters.device)
 
 	to_tensor = data_utils.ToTensor()
-	stft = data_utils.STFT(fft_frame_length, fft_step_size, encoder.device, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
+	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
 
 
 	dataset = data_parser.get_data(transform=Compose([to_tensor,stft]))

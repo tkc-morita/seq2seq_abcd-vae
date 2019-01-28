@@ -110,7 +110,7 @@ class Learner(object):
 			feature_params = self.encoder(batched_input)
 			features = self.feature_sampler(*feature_params)
 			padded_input, lengths = torch.nn.utils.rnn.pad_packed_sequence(batched_input, batch_first=True)
-			emission_params,flatten_offset_prediction = self.decoder(features, lengths)
+			emission_params,flatten_offset_prediction = self.decoder(features, lengths, self.device)
 			emission_params_BOD = self.bag_of_data_decoder(features)
 			emission_params_BOD = (torch.nn.utils.rnn.pack_sequence([p[ix].expand(l,-1) for ix,l in enumerate(lengths)]).data
 									for p in emission_params_BOD) # Can/should be .expand() rather than .repeat() for aurograd. cf. https://discuss.pytorch.org/t/torch-repeat-and-torch-expand-which-to-use/27969
@@ -171,7 +171,7 @@ class Learner(object):
 				feature_params = self.encoder(batched_input)
 				features = self.feature_sampler(*feature_params)
 				_, lengths = torch.nn.utils.rnn.pad_packed_sequence(batched_input, batch_first=True)
-				emission_params,flatten_offset_prediction = self.decoder(features, lengths)
+				emission_params,flatten_offset_prediction = self.decoder(features, lengths, self.device)
 				emission_params_BOD = self.bag_of_data_decoder(features)
 				emission_params_BOD = (torch.nn.utils.rnn.pack_sequence([p[ix].expand(l,-1) for ix,l in enumerate(lengths)]).data
 										for p in emission_params_BOD) # Should be .expand() rather than .repeat() for aurograd(?).
@@ -263,7 +263,6 @@ class Learner(object):
 			'bidirectional_encoder':self.encoder.rnn.rnn.bidirectional,
 			'mlp_hidden_size':self.encoder.to_parameters.mlp1.hidden_size,
 			'feature_size':self.decoder.feature2hidden.in_features,
-			'decoder_self_feedback':self.decoder.self_feedback,
 			'feature_distribution':self.feature_distribution,
 			'emission_distribution':self.emission_distribution
 		}
@@ -283,7 +282,6 @@ class Learner(object):
 		bidirectional_encoder = checkpoint['bidirectional_encoder']
 		feature_size = checkpoint['feature_size']
 		mlp_hidden_size = checkpoint['mlp_hidden_size']
-		decoder_self_feedback = checkpoint['decoder_self_feedback']
 
 		self.feature_distribution = checkpoint['feature_distribution']
 		self.emission_distribution = checkpoint['emission_distribution']
@@ -291,14 +289,11 @@ class Learner(object):
 		emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 
 		self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, bidirectional=bidirectional_encoder)
-		self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, emission_sampler=emission_sampler, self_feedback=decoder_self_feedback)
+		self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, emission_sampler=emission_sampler)
 		self.bag_of_data_decoder = model.MLP_To_2_Vecs(feature_size, mlp_hidden_size, input_size)
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
 		self.bag_of_data_decoder.load_state_dict(checkpoint['bag_of_data_decoder'])
-
-
-			
 
 
 		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters(), self.bag_of_data_decoder.parameters())
@@ -325,7 +320,7 @@ def get_parameters():
 	par_parser.add_argument('-l', '--learning_rate', type=float, default=1.0, help='Initial learning rate.')
 	par_parser.add_argument('-f', '--feature_size', type=int, default=13, help='# of dimensions of features into which data are encoded.')
 	par_parser.add_argument('-M', '--momentum', type=float, default=0.0, help='Momentum for the storchastic gradient descent.')
-	par_parser.add_argument('-c', '--clip', type=float, default=0.25, help='Gradient clipping rate.')
+	par_parser.add_argument('-c', '--clip', type=float, default=0.25, help='Gradient clipping.')
 	par_parser.add_argument('-D', '--dropout', type=float, default=0.0, help='Dropout rate.')
 	par_parser.add_argument('--validation_batch_size', type=int, default=None, help='Batch size for validation. Same as for training b y default.')
 	par_parser.add_argument('-R', '--rnn_type', type=str, default='GRU', help='Name of RNN to be used.')
@@ -386,7 +381,7 @@ if __name__ == '__main__':
 				)
 
 	to_tensor = data_utils.ToTensor()
-	stft = data_utils.STFT(fft_frame_length, fft_step_size, learner.device, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
+	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
 	logger.info("Sampling frequency of data: {fs}".format(fs=fs))
 	logger.info("STFT window type: {fft_window}".format(fft_window=parameters.fft_window_type))
 	logger.info("STFT frame lengths: {fft_frame_length_in_sec} sec".format(fft_frame_length_in_sec=parameters.fft_frame_length))

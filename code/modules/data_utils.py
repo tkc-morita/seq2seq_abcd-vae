@@ -97,15 +97,15 @@ class Transform(object):
 		return in_transformed
 
 class STFT(object):
-	def __init__(self, frame_length, step_size, device, window='hann_window', centering=True):
+	def __init__(self, frame_length, step_size, window='hann_window', centering=True):
 		self.frame_length = frame_length
 		self.step_size = step_size
-		self.window = getattr(torch, window)(frame_length).to(device)
+		self.window = getattr(torch, window)(frame_length)
 		self.centering = centering
 
 	def __call__(self, input_data):
-		transformed = torch.stft(
-							input_data, self.frame_length, hop_length=self.step_size, window=self.window, center=self.centering
+		transformed = input_data.stft(
+							self.frame_length, hop_length=self.step_size, window=self.window, center=self.centering
 							)
 		transformed = transformed.transpose(
 							0,1 # Make the 0th dim represent time.
