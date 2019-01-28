@@ -66,9 +66,15 @@ class Learner(object):
 			self.bag_of_data_decoder = model.MLP_To_2_Vecs(feature_size, mlp_hidden_size, input_size) # Analogous to Zhao et al.'s (2017) "bag-of-words MLP".
 			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
 			logger.info('Features are assumed to be distributed according to {feature_distribution}.'.format(feature_distribution=feature_distribution))
+			logger.info('Conditioned on the preceeding data, Input are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
 			logger.info('Random seed: {seed}'.format(seed = seed))
-			logger.info("# of hidden layers: {hl}".format(hl=rnn_layers))
-			logger.info("Dropout rate: {do}".format(do=dropout))
+			logger.info('Type of RNN used: {rnn_type}'.format(rnn_type=rnn_type))
+			logger.info("# of RNN hidden layers: {hl}".format(hl=rnn_layers))
+			logger.info("# of hidden units in the RNNs: {hs}".format(hs=rnn_hidden_size))
+			logger.info("# of hidden units in the MLPs: {hs}".format(hs=mlp_hidden_size))
+			logger.info("Encoder is bidirectional: {bidirectional_encoder}".format(bidirectional_encoder=bidirectional_encoder))
+			logger.info("Dropout rate in the input to the encoder: {do}".format(do=dropout))
+			logger.info("Self-feedback to the decoder: {decoder_self_feedback}".format(decoder_self_feedback=decoder_self_feedback))
 
 
 		self.encoder.to(self.device)
