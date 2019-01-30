@@ -34,7 +34,9 @@ class Encoder(learning.Learner):
 		return params
 
 
-	def encode_dataset(self, dataset, to_numpy = True, parameter_ix2name={}):
+	def encode_dataset(self, dataset, to_numpy = True, parameter_ix2name=None):
+		if parameter_ix2name is None:
+			parameter_ix2name = {}
 		dataloader = data_utils.DataLoader(dataset, batch_size=1)
 		df_encoded = pd.DataFrame()
 		for data, _, ix_in_list in dataloader:

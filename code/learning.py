@@ -320,7 +320,7 @@ def get_parameters():
 	par_parser.add_argument('-l', '--learning_rate', type=float, default=1.0, help='Initial learning rate.')
 	par_parser.add_argument('-f', '--feature_size', type=int, default=13, help='# of dimensions of features into which data are encoded.')
 	par_parser.add_argument('-M', '--momentum', type=float, default=0.0, help='Momentum for the storchastic gradient descent.')
-	par_parser.add_argument('-c', '--clip', type=float, default=0.25, help='Gradient clipping.')
+	par_parser.add_argument('-c', '--clip', type=float, default=1.0, help='Gradient clipping.')
 	par_parser.add_argument('-D', '--dropout', type=float, default=0.0, help='Dropout rate.')
 	par_parser.add_argument('--validation_batch_size', type=int, default=None, help='Batch size for validation. Same as for training b y default.')
 	par_parser.add_argument('-R', '--rnn_type', type=str, default='GRU', help='Name of RNN to be used.')
