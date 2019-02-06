@@ -32,7 +32,7 @@ def log_pdf_isotropic_gaussian(value, mean, log_variance, sum_only_over_val_dim 
 	return - 0.5 * (
 				math.log(2 * math.pi)
 				+ log_variance
-				+ value_mean_diff * log_variance.exp() * value_mean_diff
+				+ value_mean_diff * (-log_variance).exp() * value_mean_diff
 				).sum(dim=sum_dims)
 
 
@@ -110,6 +110,7 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		flatten_rnn_out = torch.tensor([]).to(device) # Correspond to PackedSequence.data.
 		flatten_emission_param1 = torch.tensor([]).to(device)
 		flatten_emission_param2 = torch.tensor([]).to(device)
+		flatten_out = torch.tensor([]).to(device)
 		# last_hidden = torch.tensor([])
 		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(device)
 		for bs in batch_sizes:
@@ -119,11 +120,12 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			emission_param1,emission_param2 = self.to_parameters(rnn_out)
 			batched_input = self.emission_sampler(emission_param1, emission_param2)
 			flatten_rnn_out = torch.cat([flatten_rnn_out,rnn_out], dim=0)
+			flatten_out = torch.cat([flatten_out, batched_input], dim=0)
 			flatten_emission_param1 = torch.cat([flatten_emission_param1, emission_param1], dim=0)
 			flatten_emission_param2 = torch.cat([flatten_emission_param2, emission_param2], dim=0)
 		# last_hidden = torch.cat([hidden,last_hidden], dim=0)
 		flatten_offset_weights = self.offset_predictor(flatten_rnn_out)
-		return (flatten_emission_param1,flatten_emission_param2), flatten_offset_weights
+		return (flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out
 
 
 	def _split_into_hidden_and_cell(self, reshaped_hidden):
