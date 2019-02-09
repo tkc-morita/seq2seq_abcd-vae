@@ -97,7 +97,6 @@ class Learner(object):
 		emission_loss_BOD = 0
 		cross_entropy_loss = 0
 		kl_loss = 0
-		data_size = 0
 
 		num_batches = dataloader.get_num_batches()
 
@@ -131,20 +130,20 @@ class Learner(object):
 			emission_loss_BOD += emission_loss_BOD_per_batch.item()
 			cross_entropy_loss += cross_entropy_loss_per_batch.item()
 			kl_loss += kl_loss_per_batch.item()
-			data_size += batched_input.batch_sizes.sum().item()
 
 			logger.info('{batch_ix}/{num_batches} training batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
 
-		emission_loss /= data_size
-		emission_loss_BOD /= data_size
-		cross_entropy_loss /= data_size
-		kl_loss /= len(dataloader.dataset)
+		num_strings = len(dataloader.dataset)
+		emission_loss /= num_strings
+		emission_loss_BOD /= num_strings
+		cross_entropy_loss /= num_strings
+		kl_loss /= num_strings
 		mean_loss = emission_loss + emission_loss_BOD + cross_entropy_loss + kl_loss
-		logger.info('mean training emission negative pdf loss (ORDERED): {:5.4f}'.format(emission_loss))
-		logger.info('mean training emission negative pdf loss (BAG-OF-DATA): {:5.4f}'.format(emission_loss_BOD))
-		logger.info('mean training cross-entropy loss: {:5.4f}'.format(cross_entropy_loss))
-		logger.info('mean training KL: {:5.4f}'.format(kl_loss))
-		logger.info('mean training total loss: {:5.4f}'.format(mean_loss))
+		logger.info('mean training emission negative pdf loss (ORDERED, per string): {:5.4f}'.format(emission_loss))
+		logger.info('mean training emission negative pdf loss (BAG-OF-DATA, per string): {:5.4f}'.format(emission_loss_BOD))
+		logger.info('mean training cross-entropy loss (per string): {:5.4f}'.format(cross_entropy_loss))
+		logger.info('mean training KL (per string): {:5.4f}'.format(kl_loss))
+		logger.info('mean training total loss (per string): {:5.4f}'.format(mean_loss))
 
 
 	def test_or_validate(self, dataloader):
@@ -159,7 +158,6 @@ class Learner(object):
 		emission_loss_BOD = 0
 		cross_entropy_loss = 0
 		kl_loss = 0
-		data_size = 0
 
 		num_batches = dataloader.get_num_batches()
 
@@ -184,21 +182,20 @@ class Learner(object):
 												is_offset.data
 											).item()
 				kl_loss += self.kl_func(*feature_params).item()
-				data_size += batched_input.batch_sizes.sum().item()
 
 				logger.info('{batch_ix}/{num_batches} validation batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
 
-
-		emission_loss /= data_size
-		emission_loss_BOD /= data_size
-		cross_entropy_loss /= data_size
-		kl_loss /= len(dataloader.dataset)
+		num_strings = len(dataloader.dataset)
+		emission_loss /= num_strings
+		emission_loss_BOD /= num_strings
+		cross_entropy_loss /= num_strings
+		kl_loss /= num_strings
 		mean_loss = emission_loss + emission_loss_BOD + cross_entropy_loss + kl_loss
-		logger.info('mean validation emission negative pdf loss (ORDERED): {:5.4f}'.format(emission_loss))
-		logger.info('mean validation emission negative pdf loss (BAG-OF-DATA): {:5.4f}'.format(emission_loss_BOD))
-		logger.info('mean validation cross-entropy loss: {:5.4f}'.format(cross_entropy_loss))
-		logger.info('mean validation KL: {:5.4f}'.format(kl_loss))
-		logger.info('mean validation total loss: {:5.4f}'.format(mean_loss))
+		logger.info('mean validation emission negative pdf loss (ORDERED, per string): {:5.4f}'.format(emission_loss))
+		logger.info('mean validation emission negative pdf loss (BAG-OF-DATA, per string): {:5.4f}'.format(emission_loss_BOD))
+		logger.info('mean validation cross-entropy loss (per string): {:5.4f}'.format(cross_entropy_loss))
+		logger.info('mean validation KL (per string): {:5.4f}'.format(kl_loss))
+		logger.info('mean validation total loss (per string): {:5.4f}'.format(mean_loss))
 		return mean_loss
 
 
