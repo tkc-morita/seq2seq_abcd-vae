@@ -21,11 +21,9 @@ class Decoder(encode.Encoder):
 			_,offset_prediction,out = self.decoder(features, max_length, self.device) # The output is flattened and thus the batch dimension doesn't exist.
 			offset_probs = torch.nn.Softmax(dim=-1)(offset_prediction)[:,1]
 			for ix,p in enumerate(offset_probs):
-				print(ix,p)
 				if offset_threshold < p:
 					out = out[:ix+1,:]
 					break
-			print(out)
 		if to_numpy:
 			out = out.data.numpy()
 		return out
