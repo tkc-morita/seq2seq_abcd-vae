@@ -220,7 +220,6 @@ class Learner(object):
 			logger.info("gradient clipping: {gc}".format(gc=self.gradient_clip))
 			initial_epoch = 1
 			
-
 		for epoch in range(initial_epoch, num_epochs+1):
 			logger.info('START OF EPOCH: {:3d}'.format(epoch))
 			logger.info('current learning rate: {lr}'.format(lr=self.optimizer.param_groups[0]['lr']))
@@ -261,7 +260,7 @@ class Learner(object):
 			'mlp_hidden_size':self.encoder.to_parameters.mlp1.hidden_size,
 			'feature_size':self.decoder.feature2hidden.in_features,
 			'feature_distribution':self.feature_distribution,
-			'emission_distribution':self.emission_distribution
+			'emission_distribution':self.emission_distribution,
 		}
 		torch.save(checkpoint, os.path.join(self.save_dir, 'checkpoint.pt'))
 		logger.info('Config successfully saved.')
@@ -387,6 +386,10 @@ if __name__ == '__main__':
 
 	train_dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft]))
 	valid_dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft]))
+	normalizer = train_dataset.get_max_abs()
+	train_dataset.set_normalizer(normalizer)
+	valid_dataset.set_normalizer(normalizer)
+	logger.info("Data will be normalized by the max(abs(train_data)): {normalizer}".format(normalizer=str(normalizer)))
 
 
 	if parameters.validation_batch_size is None:

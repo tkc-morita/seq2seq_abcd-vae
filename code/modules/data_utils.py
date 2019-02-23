@@ -35,24 +35,33 @@ class Data_Parser(object):
 
 
 class Dataset(torch.utils.data.Dataset):
-	def __init__(self, df_annotation, input_root, transform = None):
+	def __init__(self, df_annotation, input_root, transform = None, normalizer = None):
 		self.df_annotation = df_annotation
 		self.input_root = input_root
 		self.transform = transform
+		self.normalizer = normalizer
 		self.get_discrete_bounds()
 
 	def get_discrete_bounds(self):
+		self.max_abs = 0.0
 		for input_path,sub_df in self.df_annotation.groupby('input_path'):
 			fs, input_data = spw.read(os.path.join(self.input_root, input_path))
 			onset_ix = sub_df.onset.map(lambda sec: np.ceil(sec * fs))
 			offset_ix = sub_df.offset.map(lambda sec: np.floor(sec * fs))
 			self.df_annotation.loc[sub_df.index, 'onset_ix'] = onset_ix
 			self.df_annotation.loc[sub_df.index, 'offset_ix'] = offset_ix
-			# self.df_annotation.loc[sub_df.index, 'length'] = offset_ix - onset_ix
+			local_max = float(np.max(np.abs(input_data)))
+			if local_max > self.max_abs:
+				self.max_abs = local_max
 		self.df_annotation.loc[:, 'onset_ix'] = self.df_annotation.loc[:, 'onset_ix'].astype(int)
 		self.df_annotation.loc[:, 'offset_ix'] = self.df_annotation.loc[:, 'offset_ix'].astype(int)
 		self.df_annotation.loc[:, 'length'] = self.df_annotation.loc[:, 'offset_ix'] - self.df_annotation.loc[:, 'onset_ix']
 
+	def get_max_abs(self):
+		return self.max_abs
+
+	def set_normalizer(self, normalizer):
+		self.normalizer = normalizer
 
 	def sort_by_length(self):
 		return self.df_annotation.sort_values('length', ascending=False)
@@ -70,6 +79,8 @@ class Dataset(torch.utils.data.Dataset):
 		# print(('onset',self.df_annotation.loc[ix, 'onset_ix']))
 		# print(('offset',self.df_annotation.loc[ix, 'offset_ix']))
 		input_data = input_data[self.df_annotation.loc[ix, 'onset_ix']:self.df_annotation.loc[ix, 'offset_ix']].astype(np.float32)
+		if not self.normalizer is None:
+			input_data /= self.normalizer
 
 
 		if self.transform:
