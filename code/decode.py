@@ -12,7 +12,7 @@ import os, argparse, itertools
 
 
 class Decoder(encode.Encoder):
-	def decode(self, features, to_numpy=True, is_param = True, max_length=15000, offset_threshold=0.5):
+	def decode(self, features, to_numpy=True, is_param = True, max_length=15000, offset_threshold=0.5, normalizer=1.0):
 		with torch.no_grad():
 			if is_param:
 				features = self.feature_sampler(**features)
@@ -24,15 +24,16 @@ class Decoder(encode.Encoder):
 				if offset_threshold < p:
 					out = out[:ix+1,:]
 					break
+			out *= normalizer
 		if to_numpy:
 			out = out.data.numpy()
 		return out
 
 
-	def decode_dataset(self, dataset, to_numpy=True, is_param = True, max_length=15000, offset_threshold=0.5):
+	def decode_dataset(self, dataset, to_numpy=True, is_param = True, max_length=15000, offset_threshold=0.5, normalizer=1.0):
 		decoded = []
 		for data in dataset:
-			decoded.append(self.decode(data, to_numpy=to_numpy, is_param=is_param, max_length=max_length, offset_threshold=offset_threshold))
+			decoded.append(self.decode(data, to_numpy=to_numpy, is_param=is_param, max_length=max_length, offset_threshold=offset_threshold, normalizer=normalizer))
 		return decoded
 
 def istft(spectra, hop_length=None, win_length=None, window='hann', center=True):
@@ -49,6 +50,7 @@ def get_parameters():
 
 	par_parser.add_argument('model_dir', type=str, help='Path to the directory containing learning info.')
 	par_parser.add_argument('data', type=str, help='Path to the data csv file.')
+	par_parser.add_argument('data_normalizer', type=float, help='Normalizing constant multiplied to the output.')
 	par_parser.add_argument('-d', '--device', type=str, default='cpu', help='Computing device.')
 	par_parser.add_argument('-S', '--save_dir', type=str, default=None, help='Path to the directory where results are saved.')
 	par_parser.add_argument('-F','--sampling_rate', type=int, default=32000, help='Sampling rate of the output wav file.')
@@ -77,7 +79,7 @@ if __name__ == '__main__':
 	# Get a model.
 	decoder = Decoder(parameters.model_dir, device=parameters.device)
 
-	decoded = decoder.decode_dataset(dataset)
+	decoded = decoder.decode_dataset(dataset, normalizer = parameters.data_normalizer)
 
 	fft_frame_length = int(np.floor(parameters.fft_frame_length * parameters.sampling_rate))
 	fft_step_size = int(np.floor(parameters.fft_step_size * parameters.sampling_rate))

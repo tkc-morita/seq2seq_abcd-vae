@@ -60,6 +60,7 @@ def get_parameters():
 	par_parser.add_argument('model_dir', type=str, help='Path to the directory containing learning info.')
 	par_parser.add_argument('input_root', type=str, help='Path to the root directory under which inputs are located.')
 	par_parser.add_argument('annotation_file', type=str, help='Path to the annotation csv file.')
+	par_parser.add_argument('data_normalizer', type=float, help='Normalizing constant to devide the data.')
 	par_parser.add_argument('-d', '--device', type=str, default='cpu', help='Computing device.')
 	par_parser.add_argument('-S', '--save_path', type=str, default=None, help='Path to the file where results are saved.')
 	par_parser.add_argument('--fft_frame_length', type=float, default=0.008, help='FFT frame length in sec.')
@@ -67,6 +68,7 @@ def get_parameters():
 	par_parser.add_argument('--fft_window_type', type=str, default='hann_window', help='Window type for FFT. "hann_window" by default.')
 	par_parser.add_argument('--fft_no_centering', action='store_true', help='If selected, no centering in FFT.')
 	par_parser.add_argument('-p', '--parameter_names', type=str, default=None, help='Comma-separated parameter names.')
+	
 
 	return par_parser.parse_args()
 
@@ -91,6 +93,7 @@ if __name__ == '__main__':
 
 
 	dataset = data_parser.get_data(transform=Compose([to_tensor,stft]))
+	dataset.set_normalizer(parameters.data_normalizer)
 
 	if parameters.parameter_names is None:
 		parameter_ix2name = {}
