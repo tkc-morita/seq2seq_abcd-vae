@@ -50,18 +50,9 @@ class Dataset(torch.utils.data.Dataset):
 			offset_ix = sub_df.offset.map(lambda sec: np.floor(sec * fs))
 			self.df_annotation.loc[sub_df.index, 'onset_ix'] = onset_ix
 			self.df_annotation.loc[sub_df.index, 'offset_ix'] = offset_ix
-			local_max = float(np.max(np.abs(input_data)))
-			if local_max > self.max_abs:
-				self.max_abs = local_max
 		self.df_annotation.loc[:, 'onset_ix'] = self.df_annotation.loc[:, 'onset_ix'].astype(int)
 		self.df_annotation.loc[:, 'offset_ix'] = self.df_annotation.loc[:, 'offset_ix'].astype(int)
 		self.df_annotation.loc[:, 'length'] = self.df_annotation.loc[:, 'offset_ix'] - self.df_annotation.loc[:, 'onset_ix']
-
-	def get_max_abs(self):
-		return self.max_abs
-
-	def set_normalizer(self, normalizer):
-		self.normalizer = normalizer
 
 	def sort_by_length(self):
 		return self.df_annotation.sort_values('length', ascending=False)
@@ -76,16 +67,10 @@ class Dataset(torch.utils.data.Dataset):
 		_, input_data = spw.read(os.path.join(self.input_root, input_path))
 		if input_data.ndim > 1:
 			input_data = input_data[:,0] # Use the 1st ch.
-		# print(('onset',self.df_annotation.loc[ix, 'onset_ix']))
-		# print(('offset',self.df_annotation.loc[ix, 'offset_ix']))
 		input_data = input_data[self.df_annotation.loc[ix, 'onset_ix']:self.df_annotation.loc[ix, 'offset_ix']].astype(np.float32)
-		if not self.normalizer is None:
-			input_data /= self.normalizer
-
 
 		if self.transform:
 			input_data = self.transform(input_data)
-
 		return input_data
 
 
@@ -103,7 +88,7 @@ class Transform(object):
 	def __init__(self, in_trans):
 		self.in_trans = in_trans
 		
-	def __call__(self, input_data, output_data):
+	def __call__(self, input_data):
 		in_transformed = self.in_trans(input_data)
 		return in_transformed
 

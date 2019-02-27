@@ -333,6 +333,8 @@ def get_parameters():
 	par_parser.add_argument('--fft_window_type', type=str, default='hann_window', help='Window type for FFT. "hann_window" by default.')
 	par_parser.add_argument('--fft_no_centering', action='store_true', help='If selected, no centering in FFT.')
 	par_parser.add_argument('-p', '--patience', type=int, default=0, help='# of epochs before updating the learning rate.')
+	par_parser.add_argument('-N','--data_normalizer', type=float, default=1.0, help='Normalizing constant to devide the data.')
+	par_parser.add_argument('-E','--epsilon', type=float, default=1e-15, help='Small positive real number to add to avoid log(0).')
 	# par_parser.add_argument('--retrieve', type=str, help='Path to a directory with previous training results. Retrieve previous training.')
 
 	return par_parser.parse_args()
@@ -378,19 +380,17 @@ if __name__ == '__main__':
 
 	to_tensor = data_utils.ToTensor()
 	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
+	normalize_log_abs = data_utils.Transform(lambda t: (t.abs()+parameters.epsilon).log() / parameters.data_normalizer)
+	logger.info("log(abs(STFT(wav)) + {eps}) / {normalizer} will be the input.".format(eps=parameters.epsilon, normalizer=parameters.data_normalizer))
 	logger.info("Sampling frequency of data: {fs}".format(fs=fs))
 	logger.info("STFT window type: {fft_window}".format(fft_window=parameters.fft_window_type))
 	logger.info("STFT frame lengths: {fft_frame_length_in_sec} sec".format(fft_frame_length_in_sec=parameters.fft_frame_length))
 	logger.info("STFT step size: {fft_step_size_in_sec} sec".format(fft_step_size_in_sec=parameters.fft_step_size))
 
 
-	train_dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft]))
-	valid_dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft]))
-	normalizer = train_dataset.get_max_abs()
-	train_dataset.set_normalizer(normalizer)
-	valid_dataset.set_normalizer(normalizer)
-	logger.info("Data will be normalized by the max(abs(train_data)): {normalizer}".format(normalizer=str(normalizer)))
-
+	train_dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft,normalize_log_abs]))
+	valid_dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft,normalize_log_abs]))
+	
 
 	if parameters.validation_batch_size is None:
 		parameters.batch_size = parameters.batch_size
