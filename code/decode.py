@@ -12,36 +12,40 @@ import os, argparse, itertools
 
 
 class Decoder(encode.Encoder):
-	def decode(self, features, to_numpy=True, is_param = True, max_length=15000, offset_threshold=0.5, normalizer=1.0):
+	def decode(self, features, to_numpy=True, is_param = True, max_length=15000, offset_threshold=0.5):
 		with torch.no_grad():
 			if is_param:
 				features = self.feature_sampler(**features)
 			features = features.to(self.device).view(1,-1) # Add batch dimension
 			max_length = torch.tensor([max_length]).to(self.device)
-			_,offset_prediction,out = self.decoder(features, max_length, self.device) # The output is flattened and thus the batch dimension doesn't exist.
+			_,_,offset_prediction,out = self.decoder(features, max_length, self.device) # The output is flattened and thus the batch dimension doesn't exist.
 			offset_probs = torch.nn.Softmax(dim=-1)(offset_prediction)[:,1]
 			for ix,p in enumerate(offset_probs):
 				if offset_threshold < p:
 					out = out[:ix+1,:]
 					break
-			out *= normalizer
+			data_dim = int(batched_input.data.size(-1)/2) # Half the data are signs.
+			value = out[...,:data_dim]
+			sign = out[...,data_dim:]
 		if to_numpy:
-			out = out.data.numpy()
-		return out
+			value = value.data.numpy()
+			sign = sign.data.numpy()
+		return value,sign
 
 
-	def decode_dataset(self, dataset, to_numpy=True, is_param = True, max_length=15000, offset_threshold=0.5, normalizer=1.0):
+	def decode_dataset(self, dataset, to_numpy=True, is_param = True, max_length=15000, offset_threshold=0.5):
 		decoded = []
 		for data in dataset:
-			decoded.append(self.decode(data, to_numpy=to_numpy, is_param=is_param, max_length=max_length, offset_threshold=offset_threshold, normalizer=normalizer))
+			decoded.append(self.decode(data, to_numpy=to_numpy, is_param=is_param, max_length=max_length, offset_threshold=offset_threshold))
 		return decoded
 
-def istft(spectra, hop_length=None, win_length=None, window='hann', center=True):
+def exp_istft(log_abs_spectra_and_signs, hop_length=None, win_length=None, window='hann', center=True, normalizer=1.0):
 	wavs = []
-	for s in spectra:
-		s = s.reshape(s.shape[0], -1, 2).transpose(1,0,2) # freqs x time x real_imag
-		s = s[...,0] + 1j * s[...,1] # To complex
-		wavs.append(librosa.core.istft(s, hop_length=hop_length, win_length=win_length, window=window, center=center))
+	for spectrum,sign in log_abs_spectra_and_signs:
+		spectrum = np.exp(spectrum * normalizer) * sign # Inverse "log(abs(spectrum)) / normalizer".
+		spectrum = spectrum.reshape(spectrum.shape[0], -1, 2).transpose(1,0,2) # freqs x time x real_imag
+		spectrum = spectrum[...,0] + 1j * spectrum[...,1] # To complex
+		wavs.append(librosa.core.istft(spectrum, hop_length=hop_length, win_length=win_length, window=window, center=center))
 	return wavs
 
 
@@ -50,7 +54,7 @@ def get_parameters():
 
 	par_parser.add_argument('model_dir', type=str, help='Path to the directory containing learning info.')
 	par_parser.add_argument('data', type=str, help='Path to the data csv file.')
-	par_parser.add_argument('data_normalizer', type=float, help='Normalizing constant multiplied to the output.')
+	par_parser.add_argument('data_normalizer', type=float, help='(Reverse-)Normalizing constant multiplied to the output.')
 	par_parser.add_argument('-d', '--device', type=str, default='cpu', help='Computing device.')
 	par_parser.add_argument('-S', '--save_dir', type=str, default=None, help='Path to the directory where results are saved.')
 	par_parser.add_argument('-F','--sampling_rate', type=int, default=32000, help='Sampling rate of the output wav file.')
@@ -79,12 +83,12 @@ if __name__ == '__main__':
 	# Get a model.
 	decoder = Decoder(parameters.model_dir, device=parameters.device)
 
-	decoded = decoder.decode_dataset(dataset, normalizer = parameters.data_normalizer)
+	decoded = decoder.decode_dataset(dataset)
 
 	fft_frame_length = int(np.floor(parameters.fft_frame_length * parameters.sampling_rate))
 	fft_step_size = int(np.floor(parameters.fft_step_size * parameters.sampling_rate))
 
-	wavs = istft(decoded, hop_length=fft_step_size, win_length=fft_frame_length, window=parameters.fft_window_type, center=not parameters.fft_no_centering)
+	wavs = exp_istft(decoded, hop_length=fft_step_size, win_length=fft_frame_length, window=parameters.fft_window_type, center=not parameters.fft_no_centering, normalizer = parameters.data_normalizer)
 
 	for ix, w in enumerate(wavs):
 		spw.write(save_path.format(ix=ix), parameters.sampling_rate, w)

@@ -52,7 +52,7 @@ class RNN_Variational_Encoder(torch.nn.Module):
 			hidden_size_total *= 2
 		if rnn_type == 'LSTM':
 			hidden_size_total *= 2
-		self.to_parameters = MLP_To_2_Vecs(hidden_size_total, mlp_hidden_size, parameter_size)
+		self.to_parameters = MLP_To_k_Vecs(hidden_size_total, mlp_hidden_size, parameter_size, 2)
 
 	def forward(self, packed_input):
 		_, last_hidden = self.rnn(packed_input)
@@ -90,12 +90,13 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			self.reshape_hidden = lambda hidden: self._reshape_hidden(hidden, (-1, rnn_hidden_size))
 			self.shrink_hidden = lambda hidden, batch_size: hidden[:batch_size]
 		self.feature2hidden = torch.nn.Linear(feature_size, hidden_size_total)
-		self.to_parameters = MLP_To_2_Vecs(rnn_hidden_size, mlp_hidden_size, output_size)
-		self.offset_predictor = torch.nn.Linear(rnn_hidden_size, 2)
+		self.to_parameters = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 3)
+		self.offset_predictor = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, 1, 1)
 		assert rnn_layers==1, 'Only rnn_layers=1 is currently supported.'
 		assert not emission_sampler is None, 'emission_sampler must be provided.'
 		self.emission_sampler = emission_sampler
-		self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, dropout=dropout)
+		self.rnn_cell = RNN_Cell(output_size*2, rnn_hidden_size, model_type=rnn_type, dropout=dropout)
+		self.sigmoid = torch.nn.Sigmoid()
 
 	def forward(self, features, lengths, device):
 		"""
@@ -110,6 +111,7 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		flatten_rnn_out = torch.tensor([]).to(device) # Correspond to PackedSequence.data.
 		flatten_emission_param1 = torch.tensor([]).to(device)
 		flatten_emission_param2 = torch.tensor([]).to(device)
+		flatten_sign_weight = torch.tensor([]).to(device)
 		flatten_out = torch.tensor([]).to(device)
 		# last_hidden = torch.tensor([])
 		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(device)
@@ -117,15 +119,18 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			# last_hidden = torch.cat([hidden[bs:],last_hidden], dim=0) # hidden[bs:] is non-empty only if hidden.size(0) > bs.
 			hidden = self.rnn_cell(batched_input[:bs], self.shrink_hidden(hidden,bs))
 			rnn_out = self.get_output(hidden)
-			emission_param1,emission_param2 = self.to_parameters(rnn_out)
+			emission_param1,emission_param2,sign_weight = self.to_parameters(rnn_out)
 			batched_input = self.emission_sampler(emission_param1, emission_param2)
 			flatten_rnn_out = torch.cat([flatten_rnn_out,rnn_out], dim=0)
-			flatten_out = torch.cat([flatten_out, batched_input], dim=0)
 			flatten_emission_param1 = torch.cat([flatten_emission_param1, emission_param1], dim=0)
 			flatten_emission_param2 = torch.cat([flatten_emission_param2, emission_param2], dim=0)
+			flatten_sign_weight = torch.cat([flatten_sign_weight, sign_weight], dim=0)
+			sign = (self.sigmoid(sign_weight) - torch.rand_like(sign_weight)).sign()
+			batched_input = torch.cat([batched_input, sign], dim=-1)
+			flatten_out = torch.cat([flatten_out, batched_input], dim=0)
 		# last_hidden = torch.cat([hidden,last_hidden], dim=0)
-		flatten_offset_weights = self.offset_predictor(flatten_rnn_out)
-		return (flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out
+		flatten_offset_weights = self.offset_predictor(flatten_rnn_out)[0].squeeze(-1) # Singleton list returned.
+		return (flatten_emission_param1,flatten_emission_param2), flatten_sign_weight, flatten_offset_weights, flatten_out
 
 
 	def _split_into_hidden_and_cell(self, reshaped_hidden):
@@ -171,20 +176,14 @@ class RNN_Cell(torch.nn.Module):
 		return hidden
 
 
-class MLP_To_2_Vecs(torch.nn.Module):
-	def __init__(self, input_size, hidden_size1, output_size1, hidden_size2=None, output_size2=None):
-		super(MLP_To_2_Vecs, self).__init__()
-		if hidden_size2 is None:
-			hidden_size2 = hidden_size1
-		if output_size2 is None:
-			output_size2 = output_size1
-		self.mlp1 = MLP(input_size, hidden_size1, output_size1)
-		self.mlp2 = MLP(input_size, hidden_size2, output_size2)
+class MLP_To_k_Vecs(torch.nn.Module):
+	def __init__(self, input_size, hidden_size, output_size, k):
+		super(MLP_To_k_Vecs, self).__init__()
+		self.mlps = torch.nn.ModuleList([MLP(input_size, hidden_size, output_size) for ix in range(k)])
 		
 	def forward(self, batched_input):
-		output1 = self.mlp1(batched_input)
-		output2 = self.mlp2(batched_input)
-		return output1, output2
+		out = [mlp(batched_input) for mlp in self.mlps]
+		return out
 
 
 class MLP(torch.nn.Module):

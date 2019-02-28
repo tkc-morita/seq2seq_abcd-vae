@@ -139,13 +139,11 @@ class DataLoader(object):
 		# pseudo_input = [] # Input for the decoder.
 		is_offset = []
 		for ix in ixs:
-			seq = self.dataset[ix]
-			batched_input.append(seq)
-			# pseudo_input.append(torch.zeros_like(seq))
+			seq,sign = self.dataset[ix]
+			batched_input.append(torch.cat([seq,sign], dim=-1))
 			l = seq.size(0)
-			is_offset.append(torch.tensor([0]*(l-1)+[1]))
+			is_offset.append(torch.tensor([0.0]*(l-1)+[1.0]))
 		batched_input = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(batched_input)
-		# pseudo_input = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(pseudo_input)
 		is_offset = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(is_offset)
 		return batched_input, is_offset, ixs
 

@@ -68,6 +68,7 @@ def get_parameters():
 	par_parser.add_argument('--fft_window_type', type=str, default='hann_window', help='Window type for FFT. "hann_window" by default.')
 	par_parser.add_argument('--fft_no_centering', action='store_true', help='If selected, no centering in FFT.')
 	par_parser.add_argument('-p', '--parameter_names', type=str, default=None, help='Comma-separated parameter names.')
+	par_parser.add_argument('-E','--epsilon', type=float, default=1e-15, help='Small positive real number to add to avoid log(0).')
 	
 
 	return par_parser.parse_args()
@@ -90,10 +91,10 @@ if __name__ == '__main__':
 
 	to_tensor = data_utils.ToTensor()
 	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
+	get_sign = data_utils.Transform(lambda t: (t,t.sign()))
+	normalize_log_abs = data_utils.Transform(lambda t_and_sign: ((t_and_sign[0].abs()+parameters.epsilon).log() / parameters.data_normalizer, t_and_sign[1]))
 
-
-	dataset = data_parser.get_data(transform=Compose([to_tensor,stft]))
-	dataset.set_normalizer(parameters.data_normalizer)
+	dataset = data_parser.get_data(transform=Compose([to_tensor,stft,get_sign,normalize_log_abs]))
 
 	if parameters.parameter_names is None:
 		parameter_ix2name = {}
