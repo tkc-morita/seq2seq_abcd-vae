@@ -19,12 +19,12 @@ class Decoder(encode.Encoder):
 			features = features.to(self.device).view(1,-1) # Add batch dimension
 			max_length = torch.tensor([max_length]).to(self.device)
 			_,_,offset_prediction,out = self.decoder(features, max_length, self.device) # The output is flattened and thus the batch dimension doesn't exist.
-			offset_probs = torch.nn.Softmax(dim=-1)(offset_prediction)[:,1]
+			offset_probs = torch.nn.Sigmoid()(offset_prediction)
 			for ix,p in enumerate(offset_probs):
 				if offset_threshold < p:
 					out = out[:ix+1,:]
 					break
-			data_dim = int(batched_input.data.size(-1)/2) # Half the data are signs.
+			data_dim = int(out.size(-1)/2) # Half the data are signs.
 			value = out[...,:data_dim]
 			sign = out[...,data_dim:]
 		if to_numpy:
