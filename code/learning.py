@@ -309,7 +309,7 @@ class Learner(object):
 		self.feature_sampler,_,self.kl_func = model.choose_distribution(self.feature_distribution)
 		emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 
-		self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, bidirectional=bidirectional_encoder)
+		self.encoder = model.RNN_Variational_Encoder(input_size*2, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, bidirectional=bidirectional_encoder)
 		self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, emission_sampler=emission_sampler)
 		self.bag_of_data_decoder = model.MLP_To_k_Vecs(feature_size, mlp_hidden_size, input_size, 3)
 		self.encoder.load_state_dict(checkpoint['encoder'])
