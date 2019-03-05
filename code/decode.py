@@ -12,7 +12,11 @@ import os, argparse, itertools
 
 
 class Decoder(encode.Encoder):
-	def decode(self, features, to_numpy=True, is_param = True, max_length=15000, offset_threshold=0.5):
+	def __init__(self, *args, **kargs):
+		super(Decoder, self).__init__(args, **kargs)
+		self.get_mean = model
+
+	def decode(self, features, to_numpy=True, is_param = True, max_length=15000, offset_threshold=0.5, take_mean=False):
 		with torch.no_grad():
 			if is_param:
 				features = self.feature_sampler(**features)
@@ -33,10 +37,10 @@ class Decoder(encode.Encoder):
 		return value,sign
 
 
-	def decode_dataset(self, dataset, to_numpy=True, is_param = True, max_length=15000, offset_threshold=0.5):
+	def decode_dataset(self, dataset, to_numpy=True, is_param = True, max_length=15000, offset_threshold=0.5, take_mean=False):
 		decoded = []
 		for data in dataset:
-			decoded.append(self.decode(data, to_numpy=to_numpy, is_param=is_param, max_length=max_length, offset_threshold=offset_threshold))
+			decoded.append(self.decode(data, to_numpy=to_numpy, is_param=is_param, max_length=max_length, offset_threshold=offset_threshold, take_mean=take_mean))
 		return decoded
 
 def exp_istft(log_abs_spectra_and_signs, hop_length=None, win_length=None, window='hann', center=True, normalizer=1.0):
@@ -62,7 +66,7 @@ def get_parameters():
 	par_parser.add_argument('--fft_step_size', type=float, default=0.004, help='FFT step size in sec.')
 	par_parser.add_argument('--fft_window_type', type=str, default='hann', help='Window type for FFT. "hann_window" by default.')
 	par_parser.add_argument('--fft_no_centering', action='store_true', help='If selected, no centering in FFT.')
-
+	par_parser.add_argument('-m', '--take_mean', action='store_true', help='If selected, take the mean of probabilistic distributions instead of sampling from them.')
 	return par_parser.parse_args()
 
 
@@ -83,7 +87,7 @@ if __name__ == '__main__':
 	# Get a model.
 	decoder = Decoder(parameters.model_dir, device=parameters.device)
 
-	decoded = decoder.decode_dataset(dataset)
+	decoded = decoder.decode_dataset(dataset, take_mean=parameters.take_mean)
 
 	fft_frame_length = int(np.floor(parameters.fft_frame_length * parameters.sampling_rate))
 	fft_step_size = int(np.floor(parameters.fft_step_size * parameters.sampling_rate))

@@ -4,7 +4,7 @@ import torch
 from torchvision.transforms import Compose
 import numpy as np
 import pandas as pd
-from modules import model, data_utils
+from modules import data_utils
 import learning
 import os, argparse, itertools
 
