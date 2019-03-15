@@ -1,6 +1,7 @@
 # coding :utf-8
 
 import numpy as np
+import pandas as pd
 import torch
 from torchvision.transforms import Compose
 import sys
@@ -17,8 +18,24 @@ def hist_data(dataset):
 	listed_data = []
 	for batched_input, _, _ in dataloader:
 		listed_data += batched_input.data.view(-1).tolist()
-	sns.distplot(np.log(np.abs(listed_data)+1e-15), kde=False)
+	sns.distplot(listed_data, kde=False)
 	plt.show()
+
+def get_quantiles(dataset):
+	dataloader = data_utils.DataLoader(dataset)
+	listed_data = []
+	for batched_input, _, _ in dataloader:
+		listed_data += batched_input.data.view(-1).tolist()
+	srs = pd.Series(listed_data)
+	print('min', srs.min())
+	print('0.05',srs.quantile(q=0.05))
+	print('0.10',srs.quantile(q=0.1))
+	print('0.25',srs.quantile(q=0.25))
+	print('0.50',srs.quantile(q=0.5))
+	print('0.75',srs.quantile(q=0.75))
+	print('0.90',srs.quantile(q=0.9))
+	print('0.95',srs.quantile(q=0.95))
+	print('max', srs.max())
 
 def get_parameters():
 	par_parser = argparse.ArgumentParser()
@@ -40,8 +57,10 @@ if __name__ == "__main__":
 
 	to_tensor = data_utils.ToTensor()
 	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
+	take_log = data_utils.Transform(lambda x: x.log())
 
-	train_dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft]))
-	# valid_dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft]))
+	dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft,take_log]))
+	# dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft,take_log]))
 
-	hist_data(train_dataset)
+	# hist_data(dataset)
+	get_quantiles(dataset)

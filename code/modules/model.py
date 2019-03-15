@@ -90,13 +90,12 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			self.reshape_hidden = lambda hidden: self._reshape_hidden(hidden, (-1, rnn_hidden_size))
 			self.shrink_hidden = lambda hidden, batch_size: hidden[:batch_size]
 		self.feature2hidden = torch.nn.Linear(feature_size, hidden_size_total)
-		self.to_parameters = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 3)
+		self.to_parameters = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 2)
 		self.offset_predictor = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, 1, 1)
 		assert rnn_layers==1, 'Only rnn_layers=1 is currently supported.'
 		assert not emission_sampler is None, 'emission_sampler must be provided.'
 		self.emission_sampler = emission_sampler
-		self.rnn_cell = RNN_Cell(output_size*2, rnn_hidden_size, model_type=rnn_type, dropout=dropout)
-		self.sigmoid = torch.nn.Sigmoid()
+		self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, dropout=dropout)
 
 	def forward(self, features, lengths, device):
 		"""
@@ -111,7 +110,6 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		flatten_rnn_out = torch.tensor([]).to(device) # Correspond to PackedSequence.data.
 		flatten_emission_param1 = torch.tensor([]).to(device)
 		flatten_emission_param2 = torch.tensor([]).to(device)
-		flatten_sign_weight = torch.tensor([]).to(device)
 		flatten_out = torch.tensor([]).to(device)
 		# last_hidden = torch.tensor([])
 		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(device)
@@ -119,18 +117,15 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			# last_hidden = torch.cat([hidden[bs:],last_hidden], dim=0) # hidden[bs:] is non-empty only if hidden.size(0) > bs.
 			hidden = self.rnn_cell(batched_input[:bs], self.shrink_hidden(hidden,bs))
 			rnn_out = self.get_output(hidden)
-			emission_param1,emission_param2,sign_weight = self.to_parameters(rnn_out)
+			emission_param1,emission_param2 = self.to_parameters(rnn_out)
 			batched_input = self.emission_sampler(emission_param1, emission_param2)
 			flatten_rnn_out = torch.cat([flatten_rnn_out,rnn_out], dim=0)
 			flatten_emission_param1 = torch.cat([flatten_emission_param1, emission_param1], dim=0)
 			flatten_emission_param2 = torch.cat([flatten_emission_param2, emission_param2], dim=0)
-			flatten_sign_weight = torch.cat([flatten_sign_weight, sign_weight], dim=0)
-			sign = (self.sigmoid(sign_weight) - torch.rand_like(sign_weight)).sign()
-			batched_input = torch.cat([batched_input, sign], dim=-1)
 			flatten_out = torch.cat([flatten_out, batched_input], dim=0)
 		# last_hidden = torch.cat([hidden,last_hidden], dim=0)
 		flatten_offset_weights = self.offset_predictor(flatten_rnn_out)[0].squeeze(-1) # Singleton list returned.
-		return (flatten_emission_param1,flatten_emission_param2), flatten_sign_weight, flatten_offset_weights, flatten_out
+		return (flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out
 
 
 	def _split_into_hidden_and_cell(self, reshaped_hidden):
@@ -142,6 +137,20 @@ class RNN_Variational_Decoder(torch.nn.Module):
 	def _length_to_batch_sizes(self, lengths):
 		batch_sizes = [(lengths>t).sum() for t in range(lengths.max())]
 		return batch_sizes
+
+	def sampler2mean(self, mean_ix = 0):
+		"""
+		Replace the self.emission_sampler with a function that returns the mean of the distribution.
+		Currently, the mean is assumed to be represented as one of the two arguments to the self.emission_sampler (selected by mean_ix).
+		"""
+		self._emission_sampler = self.emission_sampler
+		self.emission_sampler = lambda emission_param1, emission_param2: emission_param1 if mean_ix==0 else emission_param2
+		
+	def mean2sampler(self):
+		"""
+		Reset self.emission_sampler as a sampler.
+		"""
+		self.emission_sampler = self._emission_sampler
 
 
 class RNN(torch.nn.Module):

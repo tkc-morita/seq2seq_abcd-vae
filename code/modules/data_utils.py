@@ -46,8 +46,8 @@ class Dataset(torch.utils.data.Dataset):
 		self.max_abs = 0.0
 		for input_path,sub_df in self.df_annotation.groupby('input_path'):
 			fs, input_data = spw.read(os.path.join(self.input_root, input_path))
-			onset_ix = sub_df.onset.map(lambda sec: np.ceil(sec * fs))
-			offset_ix = sub_df.offset.map(lambda sec: np.floor(sec * fs))
+			onset_ix = (sub_df.onset * fs).map(np.ceil)
+			offset_ix = (sub_df.offset * fs).map(np.floor)
 			self.df_annotation.loc[sub_df.index, 'onset_ix'] = onset_ix
 			self.df_annotation.loc[sub_df.index, 'offset_ix'] = offset_ix
 		self.df_annotation.loc[:, 'onset_ix'] = self.df_annotation.loc[:, 'onset_ix'].astype(int)
@@ -103,11 +103,9 @@ class STFT(object):
 		transformed = input_data.stft(
 							self.frame_length, hop_length=self.step_size, window=self.window, center=self.centering
 							)
+		transformed = transformed.pow(2).sum(-1).sqrt() # Get the amplitude.
 		transformed = transformed.transpose(
 							0,1 # Make the 0th dim represent time.
-						).view(
-							transformed.size(1),
-							-1 # freq and real_vs_imag dimensions merged into one.
 						).contiguous()
 		return transformed
 
@@ -123,24 +121,27 @@ class DataLoader(object):
 		datasize = len(self.dataset)
 		self.batches = [df_sorted.index[batch_start:min(batch_start+batch_size, datasize)] for batch_start in range(0,datasize,batch_size)]
 
+	def set_shuffle(self, shuffle):
+		self.shuffle = shuffle
+
 	def __iter__(self):
-		self._counter = 0
-		self._stop = len(self.batches)
-		if self.shuffle:
-			np.random.shuffle(self.batches)
+		if not self.shuffle is None:
+			# self.shuffle.shuffle(self.batches)
+			self.batch_order = torch.randperm(len(self.batches)).tolist()
+		else:
+			self.batch_order = torch.arange(len(self.batches)).tolist()
 		return self
 
 	def __next__(self):
-		if self._counter >= self._stop:
+		if not self.batch_order:
 			raise StopIteration
-		ixs = self.batches[self._counter]
-		self._counter += 1
+		batch_ix = self.batch_order.pop()
+		ixs = self.batches[batch_ix]
 		batched_input = []
-		# pseudo_input = [] # Input for the decoder.
 		is_offset = []
 		for ix in ixs:
-			seq,sign = self.dataset[ix]
-			batched_input.append(torch.cat([seq,sign], dim=-1))
+			seq = self.dataset[ix]
+			batched_input.append(seq)
 			l = seq.size(0)
 			is_offset.append(torch.tensor([0.0]*(l-1)+[1.0]))
 		batched_input = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(batched_input)

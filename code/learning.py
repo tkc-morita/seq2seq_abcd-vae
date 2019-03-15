@@ -39,11 +39,10 @@ class Learner(object):
 			torch.manual_seed(seed)
 			if torch.cuda.is_available():
 				if device.startswith('cuda'):
-					torch.cuda.manual_seed(seed)
+					torch.cuda.manual_seed_all(seed)
 				else:
 					print('CUDA is available. Restart with option -C or --cuda to activate it.')
 
-		# self.emission_loss = torch.nn.MSELoss(reduction='sum')
 		self.bce_with_logits_loss = torch.nn.BCEWithLogitsLoss(reduction='sum')
 
 		self.save_dir = save_dir
@@ -61,12 +60,12 @@ class Learner(object):
 			self.emission_distribution =  emission_distribution
 			self.feature_sampler, _, self.kl_func = model.choose_distribution(feature_distribution)
 			emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
-			self.encoder = model.RNN_Variational_Encoder(input_size*2, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, dropout=dropout, bidirectional=bidirectional_encoder)
+			self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, dropout=dropout, bidirectional=bidirectional_encoder)
 			self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, emission_sampler=emission_sampler, self_feedback=decoder_self_feedback)
-			self.bag_of_data_decoder = model.MLP_To_k_Vecs(feature_size, mlp_hidden_size, input_size, 3) # Analogous to Zhao et al.'s (2017) "bag-of-words MLP".
+			self.bag_of_data_decoder = model.MLP_To_k_Vecs(feature_size, mlp_hidden_size, input_size, 2) # Analogous to Zhao et al.'s (2017) "bag-of-words MLP".
 			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
 			logger.info('Features are assumed to be distributed according to {feature_distribution}.'.format(feature_distribution=feature_distribution))
-			logger.info('Conditioned on the preceeding data, Input are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
+			logger.info('Conditioned on the features, data are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
 			logger.info('Random seed: {seed}'.format(seed = seed))
 			logger.info('Type of RNN used: {rnn_type}'.format(rnn_type=rnn_type))
 			logger.info("# of RNN hidden layers: {hl}".format(hl=rnn_layers))
@@ -97,8 +96,6 @@ class Learner(object):
 		emission_loss_BOD = 0
 		end_prediction_loss = 0
 		kl_loss = 0
-		sign_loss = 0
-		sign_loss_BOD = 0
 
 		num_batches = dataloader.get_num_batches()
 
@@ -111,22 +108,16 @@ class Learner(object):
 			feature_params = self.encoder(batched_input)
 			features = self.feature_sampler(*feature_params)
 			_, lengths = torch.nn.utils.rnn.pad_packed_sequence(batched_input, batch_first=True)
-			emission_params,flatten_sign_weight,flatten_offset_prediction,_ = self.decoder(features, lengths, self.device)
+			emission_params,flatten_offset_prediction,_ = self.decoder(features, lengths, self.device)
 			params_BOD = self.bag_of_data_decoder(features)
 			params_BOD = [torch.nn.utils.rnn.pack_sequence([p[ix].expand(l,-1) for ix,l in enumerate(lengths)]).data
 									for p in params_BOD] # Can/should be .expand() rather than .repeat() for aurograd. cf. https://discuss.pytorch.org/t/torch-repeat-and-torch-expand-which-to-use/27969
 
-			data_dim = int(batched_input.data.size(-1)/2) # Half the data are signs.
-			input_value = batched_input.data[...,:data_dim]
-			is_positive_sign = (batched_input.data[...,data_dim:] + 1) * 0.5
-
-			emission_loss_per_batch = -self.log_pdf_emission(input_value, *emission_params)
-			emission_loss_BOD_per_batch = -self.log_pdf_emission(input_value, *params_BOD[:-1])
-			sign_loss_per_batch = self.bce_with_logits_loss(flatten_sign_weight, is_positive_sign)
-			sign_loss_BOD_per_batch = self.bce_with_logits_loss(params_BOD[-1], is_positive_sign)
+			emission_loss_per_batch = -self.log_pdf_emission(batched_input.data, *emission_params)
+			emission_loss_BOD_per_batch = -self.log_pdf_emission(batched_input.data, *params_BOD)
 			end_prediction_loss_per_batch = self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data)
 			kl_loss_per_batch = self.kl_func(*feature_params)
-			loss = emission_loss_per_batch + end_prediction_loss_per_batch + kl_loss_per_batch + emission_loss_BOD_per_batch + sign_loss_per_batch + sign_loss_BOD_per_batch
+			loss = emission_loss_per_batch + end_prediction_loss_per_batch + kl_loss_per_batch + emission_loss_BOD_per_batch
 			loss.backward()
 
 			# `clip_grad_norm` helps prevent the exploding gradient problem in RNNs.
@@ -138,8 +129,6 @@ class Learner(object):
 			emission_loss_BOD += emission_loss_BOD_per_batch.item()
 			end_prediction_loss += end_prediction_loss_per_batch.item()
 			kl_loss += kl_loss_per_batch.item()
-			sign_loss += sign_loss_per_batch.item()
-			sign_loss_BOD += sign_loss_BOD_per_batch.item()
 
 			logger.info('{batch_ix}/{num_batches} training batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
 
@@ -148,13 +137,9 @@ class Learner(object):
 		emission_loss_BOD /= num_strings
 		end_prediction_loss /= num_strings
 		kl_loss /= num_strings
-		sign_loss /= num_strings
-		sign_loss_BOD /= num_strings
-		mean_loss = emission_loss + emission_loss_BOD + end_prediction_loss + kl_loss + sign_loss + sign_loss_BOD
+		mean_loss = emission_loss + emission_loss_BOD + end_prediction_loss + kl_loss
 		logger.info('mean training emission negative pdf loss (ORDERED, per string): {:5.4f}'.format(emission_loss))
-		logger.info('mean training sign-prediction loss (ORDERED, per string): {:5.4f}'.format(sign_loss))
 		logger.info('mean training emission negative pdf loss (BAG-OF-DATA, per string): {:5.4f}'.format(emission_loss_BOD))
-		logger.info('mean training sign-prediction loss (BAG-OF-DATA, per string): {:5.4f}'.format(sign_loss_BOD))
 		logger.info('mean training end-prediction loss (per string): {:5.4f}'.format(end_prediction_loss))
 		logger.info('mean training KL (per string): {:5.4f}'.format(kl_loss))
 		logger.info('mean training total loss (per string): {:5.4f}'.format(mean_loss))
@@ -185,19 +170,13 @@ class Learner(object):
 				feature_params = self.encoder(batched_input)
 				features = self.feature_sampler(*feature_params)
 				_, lengths = torch.nn.utils.rnn.pad_packed_sequence(batched_input, batch_first=True)
-				emission_params,flatten_sign_weight,flatten_offset_prediction,_ = self.decoder(features, lengths, self.device)
+				emission_params,flatten_offset_prediction,_ = self.decoder(features, lengths, self.device)
 				params_BOD = self.bag_of_data_decoder(features)
 				params_BOD = [torch.nn.utils.rnn.pack_sequence([p[ix].expand(l,-1) for ix,l in enumerate(lengths)]).data
 										for p in params_BOD] # Should be .expand() rather than .repeat() for aurograd(?).
 
-				data_dim = int(batched_input.data.size(-1)/2) # Half the data are signs.
-				input_value = batched_input.data[...,:data_dim]
-				is_positive_sign = (batched_input.data[...,data_dim:] + 1) * 0.5
-
-				emission_loss += -self.log_pdf_emission(input_value, *emission_params).item()
-				emission_loss_BOD += -self.log_pdf_emission(input_value, *params_BOD[:-1]).item()
-				sign_loss += torch.nn.BCEWithLogitsLoss(reduction='sum')(flatten_sign_weight, is_positive_sign).item()
-				sign_loss_BOD += torch.nn.BCEWithLogitsLoss(reduction='sum')(params_BOD[-1], is_positive_sign).item()
+				emission_loss += -self.log_pdf_emission(batched_input.data, *emission_params).item()
+				emission_loss_BOD += -self.log_pdf_emission(batched_input.data, *params_BOD).item()
 				end_prediction_loss += torch.nn.BCEWithLogitsLoss(reduction='sum')(
 												flatten_offset_prediction,
 												is_offset.data
@@ -211,13 +190,9 @@ class Learner(object):
 		emission_loss_BOD /= num_strings
 		end_prediction_loss /= num_strings
 		kl_loss /= num_strings
-		sign_loss /= num_strings
-		sign_loss_BOD /= num_strings
-		mean_loss = emission_loss + emission_loss_BOD + end_prediction_loss + kl_loss + sign_loss + sign_loss_BOD
+		mean_loss = emission_loss + emission_loss_BOD + end_prediction_loss + kl_loss
 		logger.info('mean validation emission negative pdf loss (ORDERED, per string): {:5.4f}'.format(emission_loss))
-		logger.info('mean validation sign-prediction loss (ORDERED, per string): {:5.4f}'.format(sign_loss))
 		logger.info('mean validation emission negative pdf loss (BAG-OF-DATA, per string): {:5.4f}'.format(emission_loss_BOD))
-		logger.info('mean validation sign-prediction loss (BAG-OF-DATA, per string): {:5.4f}'.format(sign_loss_BOD))
 		logger.info('mean validation end-prediction loss (per string): {:5.4f}'.format(end_prediction_loss))
 		logger.info('mean validation KL (per string): {:5.4f}'.format(kl_loss))
 		logger.info('mean validation total loss (per string): {:5.4f}'.format(mean_loss))
@@ -277,7 +252,7 @@ class Learner(object):
 			'optimizer':self.optimizer.state_dict(),
 			'lr_scheduler':self.lr_scheduler.state_dict(),
 			'gradient_clip':self.gradient_clip,
-			'input_size':int(self.encoder.rnn.rnn.input_size/2),
+			'input_size':int(self.encoder.rnn.rnn.input_size),
 			'rnn_type':self.encoder.rnn.rnn.mode,
 			'rnn_hidden_size':self.encoder.rnn.rnn.hidden_size,
 			'rnn_layers':self.encoder.rnn.rnn.num_layers,
@@ -286,7 +261,10 @@ class Learner(object):
 			'feature_size':self.decoder.feature2hidden.in_features,
 			'feature_distribution':self.feature_distribution,
 			'emission_distribution':self.emission_distribution,
+			'model_random_state':torch.get_rng_state(),
 		}
+		if torch.cuda.is_available():
+			checkpoint['model_random_state_cuda'] = torch.cuda.get_rng_state_all()
 		torch.save(checkpoint, os.path.join(self.save_dir, 'checkpoint.pt'))
 		logger.info('Config successfully saved.')
 
@@ -309,9 +287,9 @@ class Learner(object):
 		self.feature_sampler,_,self.kl_func = model.choose_distribution(self.feature_distribution)
 		emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 
-		self.encoder = model.RNN_Variational_Encoder(input_size*2, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, bidirectional=bidirectional_encoder)
+		self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, bidirectional=bidirectional_encoder)
 		self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, emission_sampler=emission_sampler)
-		self.bag_of_data_decoder = model.MLP_To_k_Vecs(feature_size, mlp_hidden_size, input_size, 3)
+		self.bag_of_data_decoder = model.MLP_To_k_Vecs(feature_size, mlp_hidden_size, input_size, 2)
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
 		self.bag_of_data_decoder.load_state_dict(checkpoint['bag_of_data_decoder'])
@@ -325,6 +303,11 @@ class Learner(object):
 		self.lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
 
 		self.gradient_clip = checkpoint['gradient_clip']
+		
+
+		torch.set_rng_state(checkpoint['model_random_state'])
+		if device=='cuda':
+			torch.cuda.set_rng_state_all(checkpoint['model_random_state_cuda'])
 		return checkpoint['epoch']
 
 
@@ -390,7 +373,7 @@ if __name__ == '__main__':
 
 	# Get a model.
 	learner = Learner(
-				fft_frame_length + 2,
+				int(fft_frame_length / 2 + 1),
 				parameters.rnn_hidden_size,
 				parameters.mlp_hidden_size,
 				parameters.feature_size,
@@ -405,17 +388,16 @@ if __name__ == '__main__':
 
 	to_tensor = data_utils.ToTensor()
 	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
-	get_sign = data_utils.Transform(lambda t: (t,t.sign()))
-	normalize_log_abs = data_utils.Transform(lambda t_and_sign: ((t_and_sign[0].abs()+parameters.epsilon).log() / parameters.data_normalizer, t_and_sign[1]))
-	logger.info("log(abs(STFT(wav)) + {eps}) / {normalizer} will be the input.".format(eps=parameters.epsilon, normalizer=parameters.data_normalizer))
+	log_and_normalize = data_utils.Transform(lambda x: x.log() / parameters.data_normalizer)
+	logger.info("log(STFT(wav)) + {eps}) / {normalizer} will be the input.".format(eps=parameters.epsilon, normalizer=parameters.data_normalizer))
 	logger.info("Sampling frequency of data: {fs}".format(fs=fs))
 	logger.info("STFT window type: {fft_window}".format(fft_window=parameters.fft_window_type))
 	logger.info("STFT frame lengths: {fft_frame_length_in_sec} sec".format(fft_frame_length_in_sec=parameters.fft_frame_length))
 	logger.info("STFT step size: {fft_step_size_in_sec} sec".format(fft_step_size_in_sec=parameters.fft_step_size))
 
 
-	train_dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft,get_sign,normalize_log_abs]))
-	valid_dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft,get_sign,normalize_log_abs]))
+	train_dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft,log_and_normalize]))
+	valid_dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft,log_and_normalize]))
 	
 
 	if parameters.validation_batch_size is None:
