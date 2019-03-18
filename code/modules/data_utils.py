@@ -8,6 +8,8 @@ import pandas as pd
 import numpy as np
 import scipy.io.wavfile as spw
 import os.path
+import warnings
+warnings.simplefilter("error")
 
 class Data_Parser(object):
 	def __init__(self, input_root, annotation_file, data_type_col_name = 'data_type'):
@@ -19,7 +21,7 @@ class Data_Parser(object):
 		if data_type is None:
 			sub_df = self.df_annotation.copy()
 		else:
-			sub_df = self.df_annotation[self.df_annotation[self.data_type_col_name]==data_type].reset_index(drop=True)
+			sub_df = self.df_annotation[self.df_annotation[self.data_type_col_name]==data_type].copy()
 		return Dataset(
 						sub_df,
 						self.input_root,
@@ -29,7 +31,7 @@ class Data_Parser(object):
 
 	def get_sample_freq(self, input_path = None):
 		if input_path is None: # Return the first wav file's fs.
-			input_path = self.df_annotation.input_path.ix[0]
+			input_path = self.df_annotation.loc[0,'input_path']
 		fs, _ = spw.read(os.path.join(self.input_root, input_path))
 		return fs
 

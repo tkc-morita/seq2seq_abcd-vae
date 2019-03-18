@@ -68,7 +68,7 @@ def get_parameters():
 	par_parser.add_argument('--fft_window_type', type=str, default='hann_window', help='Window type for FFT. "hann_window" by default.')
 	par_parser.add_argument('--fft_no_centering', action='store_true', help='If selected, no centering in FFT.')
 	par_parser.add_argument('-p', '--parameter_names', type=str, default=None, help='Comma-separated parameter names.')
-	par_parser.add_argument('-E','--epsilon', type=float, default=1e-15, help='Small positive real number to add to avoid log(0).')
+	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
 	
 
 	return par_parser.parse_args()
@@ -91,7 +91,7 @@ if __name__ == '__main__':
 
 	to_tensor = data_utils.ToTensor()
 	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
-	log_and_normalize = data_utils.Transform(lambda x: x.log() / parameters.data_normalizer)
+	log_and_normalize = data_utils.Transform(lambda x: (x + parameters.epsilon).log() / parameters.data_normalizer)
 
 	dataset = data_parser.get_data(transform=Compose([to_tensor,stft,log_and_normalize]))
 

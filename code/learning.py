@@ -342,7 +342,7 @@ def get_parameters():
 	par_parser.add_argument('--fft_no_centering', action='store_true', help='If selected, no centering in FFT.')
 	par_parser.add_argument('-p', '--patience', type=int, default=0, help='# of epochs before updating the learning rate.')
 	par_parser.add_argument('-N','--data_normalizer', type=float, default=1.0, help='Normalizing constant to devide the data.')
-	par_parser.add_argument('-E','--epsilon', type=float, default=1e-15, help='Small positive real number to add to avoid log(0).')
+	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
 	# par_parser.add_argument('--retrieve', type=str, help='Path to a directory with previous training results. Retrieve previous training.')
 
 	return par_parser.parse_args()
@@ -388,8 +388,8 @@ if __name__ == '__main__':
 
 	to_tensor = data_utils.ToTensor()
 	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
-	log_and_normalize = data_utils.Transform(lambda x: x.log() / parameters.data_normalizer)
-	logger.info("log(STFT(wav)) + {eps}) / {normalizer} will be the input.".format(eps=parameters.epsilon, normalizer=parameters.data_normalizer))
+	log_and_normalize = data_utils.Transform(lambda x: (x + parameters.epsilon).log() / parameters.data_normalizer)
+	logger.info("log(abs(STFT(wav))) + {eps}) / {normalizer} will be the input.".format(eps=parameters.epsilon, normalizer=parameters.data_normalizer))
 	logger.info("Sampling frequency of data: {fs}".format(fs=fs))
 	logger.info("STFT window type: {fft_window}".format(fft_window=parameters.fft_window_type))
 	logger.info("STFT frame lengths: {fft_frame_length_in_sec} sec".format(fft_frame_length_in_sec=parameters.fft_frame_length))

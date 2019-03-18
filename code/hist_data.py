@@ -22,11 +22,12 @@ def hist_data(dataset):
 	plt.show()
 
 def get_quantiles(dataset):
-	dataloader = data_utils.DataLoader(dataset)
+	dataloader = data_utils.DataLoader(dataset, batch_size=526)
 	listed_data = []
-	for batched_input, _, _ in dataloader:
+	for batched_input, _, ixs in dataloader:
 		listed_data += batched_input.data.view(-1).tolist()
 	srs = pd.Series(listed_data)
+	print('# of zeros')
 	print('min', srs.min())
 	print('0.05',srs.quantile(q=0.05))
 	print('0.10',srs.quantile(q=0.1))
@@ -36,6 +37,14 @@ def get_quantiles(dataset):
 	print('0.90',srs.quantile(q=0.9))
 	print('0.95',srs.quantile(q=0.95))
 	print('max', srs.max())
+
+def search_zero(dataset):
+	dataloader = data_utils.DataLoader(dataset, batch_size=1)
+	print('Ixs of data containing zeros.')
+	for batched_input, _, ixs in dataloader:
+		if (batched_input.data==0).sum():
+			print(ixs)
+
 
 def get_parameters():
 	par_parser = argparse.ArgumentParser()
@@ -57,10 +66,12 @@ if __name__ == "__main__":
 
 	to_tensor = data_utils.ToTensor()
 	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
-	take_log = data_utils.Transform(lambda x: x.log())
+	# take_log = data_utils.Transform(lambda x: x.log())
 
-	dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft,take_log]))
+	# dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft,take_log]))
 	# dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft,take_log]))
+	dataset = data_parser.get_data(transform=Compose([to_tensor,stft]))
 
 	# hist_data(dataset)
-	get_quantiles(dataset)
+	# get_quantiles(dataset)
+	search_zero(dataset)
