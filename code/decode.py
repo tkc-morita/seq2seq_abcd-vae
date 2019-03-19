@@ -66,7 +66,7 @@ def to_spectgram(log_abs_spectra_and_signs):
 
 def get_parameters():
 	par_parser = argparse.ArgumentParser()
-	par_parser.add_argument('model_dir', type=str, help='Path to the directory containing learning info.')
+	par_parser.add_argument('model_path', type=str, help='Path to the configuration file of a trained model.')
 	par_parser.add_argument('data', type=str, help='Path to the data csv file.')
 	par_parser.add_argument('data_normalizer', type=float, help='(Reverse-)Normalizing constant multiplied to the output.')
 	par_parser.add_argument('-d', '--device', type=str, default='cpu', help='Computing device.')
@@ -98,7 +98,7 @@ if __name__ == '__main__':
 	dataset = [{p_name:torch.from_numpy(p_gp.parameter_value.values.astype(np.float32)) for  p_name,p_gp in gp.groupby('parameter_name')} for data_ix,gp in df_data.groupby('data_ix')]
 
 	# Get a model.
-	decoder = Decoder(parameters.model_dir, device=parameters.device)
+	decoder = Decoder(parameters.model_path, device=parameters.device)
 
 	decoded = decoder.decode_dataset(dataset, take_mean=parameters.take_mean)
 

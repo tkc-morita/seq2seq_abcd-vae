@@ -57,7 +57,7 @@ class Encoder(learning.Learner):
 def get_parameters():
 	par_parser = argparse.ArgumentParser()
 
-	par_parser.add_argument('model_dir', type=str, help='Path to the directory containing learning info.')
+	par_parser.add_argument('model_path', type=str, help='Path to the configuration file of a trained model.')
 	par_parser.add_argument('input_root', type=str, help='Path to the root directory under which inputs are located.')
 	par_parser.add_argument('annotation_file', type=str, help='Path to the annotation csv file.')
 	par_parser.add_argument('data_normalizer', type=float, help='Normalizing constant to devide the data.')
@@ -87,7 +87,7 @@ if __name__ == '__main__':
 	fft_step_size = int(np.floor(parameters.fft_step_size * fs))
 
 	# Get a model.
-	encoder = Encoder(parameters.model_dir, device=parameters.device)
+	encoder = Encoder(parameters.model_path, device=parameters.device)
 
 	to_tensor = data_utils.ToTensor()
 	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
