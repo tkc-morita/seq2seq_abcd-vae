@@ -272,7 +272,7 @@ class Learner(object):
 	def retrieve_model(self, checkpoint_path = None, device='cpu'):
 		if checkpoint_path is None:
 			checkpoint_path = os.path.join(self.save_dir, 'checkpoint.pt')
-		checkpoint = torch.load(checkpoint_path, map_location=device)
+		checkpoint = torch.load(checkpoint_path, map_location='cpu') # Random state needs to be loaded to CPU first even when cuda is available.
 
 		input_size = checkpoint['input_size']
 		rnn_type = checkpoint['rnn_type']
@@ -304,7 +304,6 @@ class Learner(object):
 
 		self.gradient_clip = checkpoint['gradient_clip']
 		
-
 		torch.set_rng_state(checkpoint['model_random_state'])
 		if device=='cuda':
 			torch.cuda.set_rng_state_all(checkpoint['model_random_state_cuda'])

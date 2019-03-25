@@ -30,7 +30,7 @@ class Encoder(learning.Learner):
 			data = data.to(self.device)
 			params = self.encoder(data)
 		if to_numpy:
-			params = (p.data.numpy() for p in params)
+			params = (p.data.cpu().numpy() for p in params)
 		return params
 
 
