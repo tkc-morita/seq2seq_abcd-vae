@@ -25,7 +25,9 @@ class Encoder(learning.Learner):
 
 	def encode(self, data, is_packed = False, to_numpy = True):
 		if not is_packed:
-			data = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence([data])
+			if isinstance(data, list):
+				data = [data]
+			data = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(data)
 		with torch.no_grad():
 			data = data.to(self.device)
 			params = self.encoder(data)
@@ -34,24 +36,25 @@ class Encoder(learning.Learner):
 		return params
 
 
-	def encode_dataset(self, dataset, to_numpy = True, parameter_ix2name=None):
+	def encode_dataset(self, dataset, to_numpy = True, parameter_ix2name=None, batch_size=1):
 		if parameter_ix2name is None:
 			parameter_ix2name = {}
-		dataloader = data_utils.DataLoader(dataset, batch_size=1)
+		dataloader = data_utils.DataLoader(dataset, batch_size=batch_size)
 		df_encoded = pd.DataFrame()
 		for data, _, ix_in_list in dataloader:
 			params = self.encode(data, is_packed=True, to_numpy=to_numpy)
 			for parameter_ix,p in enumerate(params):
-				sub_df = pd.DataFrame()
-				sub_df['parameter_value'] = p.reshape(-1)
-				sub_df['data_ix'] = ix_in_list[0]
 				if parameter_ix in parameter_ix2name:
 					parameter_name = parameter_ix2name[parameter_ix]
 				else:
 					parameter_name = parameter_ix
-				sub_df['parameter_name'] = parameter_name
-				sub_df['feature_dim'] = sub_df.index
-				df_encoded = df_encoded.append(sub_df, ignore_index=True, sort=False)
+				for data_ix_in_batch,data_ix in enumerate(ix_in_list):
+					sub_df = pd.DataFrame()
+					sub_df['parameter_value'] = p[data_ix_in_batch,:] # num_batches x ndim
+					sub_df['data_ix'] = data_ix
+					sub_df['parameter_name'] = parameter_name
+					sub_df['feature_dim'] = sub_df.index
+					df_encoded = df_encoded.append(sub_df, ignore_index=True, sort=False)
 		return df_encoded
 
 def get_parameters():
@@ -69,7 +72,7 @@ def get_parameters():
 	par_parser.add_argument('--fft_no_centering', action='store_true', help='If selected, no centering in FFT.')
 	par_parser.add_argument('-p', '--parameter_names', type=str, default=None, help='Comma-separated parameter names.')
 	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
-	
+	par_parser.add_argument('-b', '--batch_size', type=int, default=1, help='Batch size.')
 
 	return par_parser.parse_args()
 
@@ -99,7 +102,7 @@ if __name__ == '__main__':
 		parameter_ix2name = {}
 	else:
 		parameter_ix2name = dict(enumerate(parameters.parameter_names.split(',')))
-	df_encoded = encoder.encode_dataset(dataset, parameter_ix2name=parameter_ix2name)
+	df_encoded = encoder.encode_dataset(dataset, parameter_ix2name=parameter_ix2name, batch_size=parameters.batch_size)
 	df_encoded = df_encoded.sort_values('data_ix')
 	if 'label' in data_parser.df_annotation.columns:
 		df_encoded = df_encoded.merge(data_parser.df_annotation, how='left', left_on='data_ix', right_index=True)
