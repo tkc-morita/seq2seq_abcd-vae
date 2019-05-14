@@ -91,7 +91,7 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			self.shrink_hidden = lambda hidden, batch_size: hidden[:batch_size]
 		self.feature2hidden = torch.nn.Linear(feature_size, hidden_size_total)
 		self.to_parameters = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 2)
-		self.offset_predictor = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, 1, 1)
+		self.offset_predictor = MLP(rnn_hidden_size, mlp_hidden_size, 1)
 		assert rnn_layers==1, 'Only rnn_layers=1 is currently supported.'
 		assert not emission_sampler is None, 'emission_sampler must be provided.'
 		self.emission_sampler = emission_sampler
@@ -124,7 +124,7 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			flatten_emission_param2 = torch.cat([flatten_emission_param2, emission_param2], dim=0)
 			flatten_out = torch.cat([flatten_out, batched_input], dim=0)
 		# last_hidden = torch.cat([hidden,last_hidden], dim=0)
-		flatten_offset_weights = self.offset_predictor(flatten_rnn_out)[0].squeeze(-1) # Singleton list returned.
+		flatten_offset_weights = self.offset_predictor(flatten_rnn_out).squeeze(-1) # Singleton list returned.
 		return (flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out
 
 
