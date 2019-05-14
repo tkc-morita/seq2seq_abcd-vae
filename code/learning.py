@@ -252,7 +252,7 @@ class Learner(object):
 			'optimizer':self.optimizer.state_dict(),
 			'lr_scheduler':self.lr_scheduler.state_dict(),
 			'gradient_clip':self.gradient_clip,
-			'input_size':int(self.encoder.rnn.rnn.input_size),
+			'input_size':self.encoder.rnn.rnn.input_size,
 			'rnn_type':self.encoder.rnn.rnn.mode,
 			'rnn_hidden_size':self.encoder.rnn.rnn.hidden_size,
 			'rnn_layers':self.encoder.rnn.rnn.num_layers,
