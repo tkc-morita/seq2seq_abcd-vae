@@ -91,6 +91,7 @@ class Learner(object):
 		self.encoder.train() # Turn on training mode which enables dropout.
 		self.decoder.train()
 		self.bag_of_data_decoder.train()
+		self.bce_with_logits_loss.train()
 
 		emission_loss = 0
 		emission_loss_BOD = 0
