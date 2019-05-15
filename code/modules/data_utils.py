@@ -123,9 +123,6 @@ class DataLoader(object):
 		datasize = len(self.dataset)
 		self.batches = [df_sorted.index[batch_start:min(batch_start+batch_size, datasize)] for batch_start in range(0,datasize,batch_size)]
 
-	def set_shuffle(self, shuffle):
-		self.shuffle = shuffle
-
 	def __iter__(self):
 		if self.shuffle:
 			self.batch_order = torch.randperm(len(self.batches)).tolist()
