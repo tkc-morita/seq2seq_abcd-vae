@@ -152,6 +152,7 @@ class Learner(object):
 		self.encoder.eval() # Turn on evaluation mode which disables dropout.
 		self.decoder.eval()
 		self.bag_of_data_decoder.eval()
+		self.bce_with_logits_loss.eval()
 
 		emission_loss = 0
 		emission_loss_BOD = 0
@@ -177,10 +178,7 @@ class Learner(object):
 
 				emission_loss += -self.log_pdf_emission(batched_input.data, *emission_params).item()
 				emission_loss_BOD += -self.log_pdf_emission(batched_input.data, *params_BOD).item()
-				end_prediction_loss += torch.nn.BCEWithLogitsLoss(reduction='sum')(
-												flatten_offset_prediction,
-												is_offset.data
-											).item()
+				end_prediction_loss += self.bce_with_logits_loss(flatten_offset_prediction,is_offset.data).item()
 				kl_loss += self.kl_func(*feature_params).item()
 
 				logger.info('{batch_ix}/{num_batches} validation batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
