@@ -127,8 +127,7 @@ class DataLoader(object):
 		self.shuffle = shuffle
 
 	def __iter__(self):
-		if not self.shuffle is None:
-			# self.shuffle.shuffle(self.batches)
+		if self.shuffle:
 			self.batch_order = torch.randperm(len(self.batches)).tolist()
 		else:
 			self.batch_order = torch.arange(len(self.batches)).tolist()
