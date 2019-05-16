@@ -1,7 +1,5 @@
 # coding: utf-8
 
-# coding: utf-8
-
 import torch
 import torch.utils.data
 import pandas as pd
