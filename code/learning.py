@@ -399,7 +399,7 @@ if __name__ == '__main__':
 	
 
 	if parameters.validation_batch_size is None:
-		parameters.batch_size = parameters.batch_size
+		parameters.validation_batch_size = parameters.batch_size
 
 	# Train the model.
 	learner.learn(
@@ -407,7 +407,7 @@ if __name__ == '__main__':
 			valid_dataset,
 			parameters.epochs,
 			parameters.batch_size,
-			parameters.batch_size,
+			parameters.validation_batch_size,
 			learning_rate=parameters.learning_rate,
 			momentum=parameters.momentum,
 			gradient_clip = parameters.clip,
