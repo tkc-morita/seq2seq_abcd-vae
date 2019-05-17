@@ -58,8 +58,7 @@ class Dataset(torch.utils.data.Dataset):
 		return self.df_annotation.sort_values('length', ascending=False)
 
 	def __len__(self):
-		"""Return # of data points."""
-		return self.df_annotation.shape[0]
+		return None
 
 	def __getitem__(self, ix):
 		"""Return """
