@@ -72,9 +72,17 @@ if __name__ == "__main__":
 	parser = argparse.ArgumentParser()
 	parser.add_argument('data', type=str, help='Path to the csv file containing features.')
 	parser.add_argument('-S','--save_dir', type=str, default=None, help='Path to the directory where figures are saved.')
+	parser.add_argument('-p', '--parameter', type=str, default=None, help='If given, use only the specified parameter.')
 	args = parser.parse_args()
 
 	df = pd.read_csv(args.data)
+	if args.parameter is None:
+		dim = df.feature_dim.max()+1
+		for par_ix,(par,sub_df) in enumerate(df.groupby('parameter_name')):
+			df.loc[sub_df.index,'dim'] = sub_df.feature_dim + par_ix*dim
+	else:
+		df = df[df.parameter_name==args.parameter]
+		df.loc[:,'dim'] = df.feature_dim
 	# print(df.label.unique())
 	# df.loc[:,'label'] = pd.Categorical(df.label, categories=list('vxabcdefghijklmnopqrstuwyz'))
 
