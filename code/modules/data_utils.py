@@ -35,11 +35,10 @@ class Data_Parser(object):
 
 
 class Dataset(torch.utils.data.Dataset):
-	def __init__(self, df_annotation, input_root, transform = None, normalizer = None):
+	def __init__(self, df_annotation, input_root, transform = None):
 		self.df_annotation = df_annotation
 		self.input_root = input_root
 		self.transform = transform
-		self.normalizer = normalizer
 		self.get_discrete_bounds()
 
 	def get_discrete_bounds(self):
