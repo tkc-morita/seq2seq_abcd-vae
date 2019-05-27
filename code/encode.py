@@ -25,7 +25,7 @@ class Encoder(learning.Learner):
 
 	def encode(self, data, is_packed = False, to_numpy = True):
 		if not is_packed:
-			if isinstance(data, list):
+			if not isinstance(data, list):
 				data = [data]
 			data = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(data)
 		with torch.no_grad():

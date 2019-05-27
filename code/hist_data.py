@@ -8,10 +8,10 @@ import sys
 sys.path.append('../modules')
 from modules import data_utils
 import argparse, os.path
-import matplotlib
-matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
-import seaborn as sns
+# import matplotlib
+# matplotlib.use('TkAgg')
+# import matplotlib.pyplot as plt
+# import seaborn as sns
 
 def hist_data(dataset):
 	dataloader = data_utils.DataLoader(dataset)
@@ -66,12 +66,12 @@ if __name__ == "__main__":
 
 	to_tensor = data_utils.ToTensor()
 	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
-	# take_log = data_utils.Transform(lambda x: x.log())
+	take_log = data_utils.Transform(lambda x: x.log())
 
 	# dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft,take_log]))
 	# dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft,take_log]))
-	dataset = data_parser.get_data(transform=Compose([to_tensor,stft]))
+	dataset = data_parser.get_data(transform=Compose([to_tensor,stft,take_log]))
 
 	# hist_data(dataset)
-	# get_quantiles(dataset)
-	search_zero(dataset)
+	get_quantiles(dataset)
+	# search_zero(dataset)
