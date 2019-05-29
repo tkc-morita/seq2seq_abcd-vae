@@ -44,10 +44,10 @@ class RNN_Variational_Encoder(torch.nn.Module):
 	Kingma and Willing 2014. Auto-Encoding Variational Bayes.
 	Bowman et al. 2016. Generating Sentences from a Continuous Space.
 	"""
-	def __init__(self, input_size, rnn_hidden_size, mlp_hidden_size, parameter_size, rnn_type='LSTM', rnn_layers=1, hidden_dropout = 0.0, bidirectional=True):
+	def __init__(self, input_size, rnn_hidden_size, mlp_hidden_size, parameter_size, rnn_type='LSTM', rnn_layers=1, hidden_dropout = 0.0, bidirectional=True, esn_leak=1.0):
 		super(RNN_Variational_Encoder, self).__init__()
 		if rnn_type == 'ESN':
-			pass
+			self.rnn = ESN(input_size, rnn_hidden_size, rnn_layers, dropout=hidden_dropout, bidirectional=bidirectional, batch_first=True, leak=esn_leak)
 		else:
 			self.rnn = getattr(torch.nn, rnn_type)(input_size, rnn_hidden_size, rnn_layers, dropout=hidden_dropout, bidirectional=bidirectional, batch_first=True)
 		hidden_size_total = rnn_layers * rnn_hidden_size
@@ -78,7 +78,7 @@ class RNN_Variational_Decoder(torch.nn.Module):
 	Kingma and Willing 2014. Auto-Encoding Variational Bayes.
 	Bowman et al. 2016. Generating Sentences from a Continuous Space.
 	"""
-	def __init__(self, output_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type='LSTM', rnn_layers=1, input_dropout = 0.0, self_feedback=True):
+	def __init__(self, output_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type='LSTM', rnn_layers=1, input_dropout = 0.0, self_feedback=True, esn_leak=1.0):
 		super(RNN_Variational_Decoder, self).__init__()
 		if not self_feedback:
 			input_dropout = 1.0
@@ -97,7 +97,7 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		self.offset_predictor = MLP(rnn_hidden_size, mlp_hidden_size, 1)
 		assert rnn_layers==1, 'Only rnn_layers=1 is currently supported.'
 		self.emission_sampler = emission_sampler
-		self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, input_dropout=input_dropout)
+		self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, input_dropout=input_dropout, esn_leak=esn_leak)
 
 	def forward(self, features, lengths, device):
 		"""
@@ -155,31 +155,16 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		self.emission_sampler = self._emission_sampler
 
 
-class RNN(torch.nn.Module):
-	def __init__(self, input_size, hidden_size, model_type='GRU', num_layers=1, dropout = 0.0, bidirectional=False):
-		super(RNN, self).__init__()
-		self.drop = torch.nn.Dropout(dropout)
-		self.rnn = getattr(torch.nn, model_type)(input_size, hidden_size, num_layers, bidirectional=bidirectional, batch_first=True)
-
-
-	def forward(self, packed_input, init_hidden=None):
-		"""
-		packed_input is an instance of torch.nn.utils.rnn.PackedSequence.
-		"""
-		# Note that it is prohibited to directly instantiate torch.nn.utils.rnn.PackedSequence, even though it would lead to cleaner code...
-		padded_input, lengths = torch.nn.utils.rnn.pad_packed_sequence(packed_input, batch_first=True)
-		padded_input = self.drop(padded_input) # Padding would be unnecessary if seld.drop could apply to packed_input.data and torch.nn.utils.rnn.PackedSequence(dropped, batch_sizes=packed_input.batch_sizes) is direct instantiated, but this is currently prohibited.
-		packed_input = torch.nn.utils.rnn.pack_padded_sequence(padded_input, lengths, batch_first=True)
-
-		output, last_hidden = self.rnn(packed_input)
-		return output, last_hidden
-
 
 class RNN_Cell(torch.nn.Module):
-	def __init__(self, input_size, hidden_size, model_type='LSTM', input_dropout = 0.0):
+	def __init__(self, input_size, hidden_size, model_type='LSTM', input_dropout = 0.0, esn_leak=1.0):
 		super(RNN_Cell, self).__init__()
 		self.drop = torch.nn.Dropout(input_dropout)
-		self.cell = getattr(torch.nn, model_type+'Cell')(input_size, hidden_size)
+		self.mode = model_type
+		if model_type == 'ESN':
+			self.cell = ESNCell(input_size, hidden_size, sparse_tensor=False, leak=esn_leak)
+		else:
+			self.cell = getattr(torch.nn, model_type+'Cell')(input_size, hidden_size)
 	
 	def forward(self, batched_input, init_hidden=None):
 		batched_input = self.drop(batched_input)
@@ -212,3 +197,98 @@ class MLP(torch.nn.Module):
 
 	def forward(self, batched_input):
 		return self.whole_network(batched_input)
+
+
+class ESN(torch.nn.Module):
+	def __init__(self, input_size, hidden_size, num_layers, dropout=0.0, bidirectional=False, batch_first=True, bias=False, leak=1.0, q=0.95, sparsity=0.1):
+		super(ESN, self).__init__()
+		self.input_size = input_size
+		self.mode = 'ESN'
+		self.hidden_size = hidden_size
+		self.num_layers = num_layers
+		self.bidirectional = bidirectional
+		self.dropout = dropout
+		self.bias = bias
+		self.batch_first = batch_first
+		self.leak = leak
+
+		# ESNCell(input_size, hidden_size, bias=bias, leak=leak, q=q, sparsity=sparsity)
+		internal_input_size = hidden_size
+		if bidirectional:
+			internal_input_size *= 2
+			backward_cells = [ESNCell(input_size, hidden_size, bias=bias, leak=leak, q=q, sparsity=sparsity)]
+			backward_cells += [ESNCell(internal_input_size, hidden_size, bias=bias, leak=leak, q=q, sparsity=sparsity) for l in range(num_layers-1)]
+			self.rnn_cells = [torch.nn.ModuleList(backward_cells)]
+		else:
+			self.rnn_cells = []
+		forward_cells = [ESNCell(input_size, hidden_size, bias=bias, leak=leak, q=q, sparsity=sparsity)]
+		forward_cells += [ESNCell(internal_input_size, hidden_size, bias=bias, leak=leak, q=q, sparsity=sparsity) for l in range(num_layers-1)]
+		self.rnn_cells = [torch.nn.ModuleList(forward_cells)] + self.rnn_cells
+		self.drop = torch.nn.Dropout(p=dropout)
+
+
+
+	def forward(self, packed_input, hidden=None):
+		batch_size = packed_input.batch_sizes[0]
+		out = [[] for batch_ix in range(batch_size)]
+		if hidden is None:
+			hidden = self.init_hidden(batch_size)
+		for bs in packed_input.batch_sizes:
+			input_t = packed_input.data[:bs]
+			for l,h in enumerate(hidden):
+				out_tl = torch.stack([cells_dir[l].forward(input_t, h[dir_ix,:bs]) for dir_ix,cells_dir in enumerate(self.rnn_cells)])
+				prev_minus_new = hidden[l][:,:bs,:] - out_tl # num_directions x batch_size x hidden_size
+				hidden[l] = hidden[l] - torch.cat([prev_minus_new, torch.zeros_like(hidden[l][:,bs:,:])], dim=-2)
+				out_tl = out_tl.transpose(0,1).contiguous().view(bs,-1) # batch_size x hidden_size * num_directions
+				input_t = self.drop(out_tl)
+			for batch_ix in range(bs):
+				out[batch_ix].append(out_tl[batch_ix])
+		out = torch.nn.utils.rnn.pack_sequence([torch.stack(o) for o in out])
+		hidden = torch.stack(hidden).view(-1,batch_size,self.hidden_size) # num_layers * num_directions x batch_size x hidden_size
+		return out, hidden
+
+	def init_hidden(self, batch_size):
+		return [torch.zeros((self.bidirectional+1, batch_size, self.hidden_size), requires_grad=False) for l in range(self.num_layers)]
+
+class ESNCell(torch.nn.Module):
+	def __init__(self, input_size, hidden_size, bias=False, leak=1.0, q=0.95, sparsity=0.1, sparse_tensor=True):
+		super(ESNCell, self).__init__()
+		self.input_size = input_size
+		self.hidden_size = hidden_size
+		self.bias = bias
+		self.leak = leak
+
+		# input2hidden matrix.
+		# Either either -3.0/input_size or 3.0/input_size. 
+		# tanh(x) almost ceils and floors at x=3 and -3, 
+		# so the sum should stay in the range most of the time.
+		self.weight_ih = torch.randint(2, (hidden_size, input_size), requires_grad=False, dtype=torch.float32)
+		import scipy.stats as spstats
+		quantile = spstats.binom.ppf(q, input_size, 0.5).astype('float32')
+		self.weight_ih *= 6.0 / quantile
+		self.weight_ih -= 3.0 / quantile
+
+		self.weight_hh = torch.randn(hidden_size, hidden_size, requires_grad=False)
+		self.weight_hh = torch.nn.Dropout(p=1.0-sparsity)(self.weight_hh)
+		eig_val,_ = torch.eig(self.weight_hh)
+		self.weight_hh /= (eig_val.pow(2).sum(-1)).max().sqrt() / 0.99 # Adjust by the spectral radius.
+		if sparse_tensor:
+			self.weight_hh = self.weight_hh.to_sparse() # Sparse representation.
+
+		self.activation = torch.nn.Tanh()
+
+
+	def forward(self, batched_input, hidden=None):
+		if hidden is None:
+			hidden = self.init_hidden(batched_input.size(0))
+		# print(self.weight_ih.size())
+		# print(batched_input.t().size())
+		# print(self.weight_hh.size())
+		# print(hidden.t().size())
+		update = self.activation(self.weight_ih.mm(batched_input.t()) + self.weight_hh.mm(hidden.t())).t()
+		hidden = (1.0 - self.leak) * hidden + self.leak * update
+		return hidden
+
+	def init_hidden(self, batch_size):
+		return torch.zeros((batch_size, self.hidden_size), requires_grad=False)
+
