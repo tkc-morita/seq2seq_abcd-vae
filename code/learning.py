@@ -33,7 +33,7 @@ def update_log_handler(file_dir):
 
 
 class Learner(object):
-	def __init__(self, input_size, rnn_hidden_size, mlp_hidden_size, feature_size, save_dir, rnn_type='GRU', rnn_layers=1, bidirectional_encoder=True, dropout = 0.5, device=False, seed=1111, feature_distribution='isotropic_gaussian', emission_distribution='isotropic_gaussian', decoder_self_feedback=True):
+	def __init__(self, input_size, rnn_hidden_size, mlp_hidden_size, feature_size, save_dir, rnn_type='GRU', rnn_layers=1, bidirectional_encoder=True, encoder_hidden_dropout = 0.0, decoder_input_dropout = 0.0, device=False, seed=1111, feature_distribution='isotropic_gaussian', emission_distribution='isotropic_gaussian', decoder_self_feedback=True):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
 		if not self.retrieval:
 			torch.manual_seed(seed)
@@ -60,8 +60,8 @@ class Learner(object):
 			self.emission_distribution =  emission_distribution
 			self.feature_sampler, _, self.kl_func = model.choose_distribution(feature_distribution)
 			emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
-			self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, dropout=dropout, bidirectional=bidirectional_encoder)
-			self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, emission_sampler=emission_sampler, self_feedback=decoder_self_feedback)
+			self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder)
+			self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, input_dropout=decoder_input_dropout, emission_sampler=emission_sampler, self_feedback=decoder_self_feedback)
 			self.bag_of_data_decoder = model.MLP_To_k_Vecs(feature_size, mlp_hidden_size, input_size, 2) # Analogous to Zhao et al.'s (2017) "bag-of-words MLP".
 			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
 			logger.info('Features are assumed to be distributed according to {feature_distribution}.'.format(feature_distribution=feature_distribution))
@@ -251,11 +251,11 @@ class Learner(object):
 			'optimizer':self.optimizer.state_dict(),
 			'lr_scheduler':self.lr_scheduler.state_dict(),
 			'gradient_clip':self.gradient_clip,
-			'input_size':self.encoder.rnn.rnn.input_size,
-			'rnn_type':self.encoder.rnn.rnn.mode,
-			'rnn_hidden_size':self.encoder.rnn.rnn.hidden_size,
-			'rnn_layers':self.encoder.rnn.rnn.num_layers,
-			'bidirectional_encoder':self.encoder.rnn.rnn.bidirectional,
+			'input_size':self.encoder.rnn.input_size,
+			'rnn_type':self.encoder.rnn.mode,
+			'rnn_hidden_size':self.encoder.rnn.hidden_size,
+			'rnn_layers':self.encoder.rnn.num_layers,
+			'bidirectional_encoder':self.encoder.rnn.bidirectional,
 			'mlp_hidden_size':self.encoder.to_parameters.mlps[0].hidden_size,
 			'feature_size':self.decoder.feature2hidden.in_features,
 			'feature_distribution':self.feature_distribution,
