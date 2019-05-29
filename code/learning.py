@@ -265,6 +265,8 @@ class Learner(object):
 			'decoder_rnn_hidden_size':self.decoder.rnn_cell.cell.hidden_size,
 			'encoder_rnn_layers':self.encoder.rnn.num_layers,
 			'bidirectional_encoder':self.encoder.rnn.bidirectional,
+			'encoder_hidden_dropout':self.encoder.rnn.dropout,
+			'decoder_input_dropout':self.decoder.rnn_cell.drop.p,
 			'mlp_hidden_size':self.encoder.to_parameters.mlps[0].hidden_size,
 			'feature_size':self.decoder.feature2hidden.in_features,
 			'feature_distribution':self.feature_distribution,
@@ -288,6 +290,8 @@ class Learner(object):
 		decoder_rnn_hidden_size = checkpoint['decoder_rnn_hidden_size']
 		encoder_rnn_layers = checkpoint['encoder_rnn_layers']
 		bidirectional_encoder = checkpoint['bidirectional_encoder']
+		encoder_hidden_dropout = checkpoint['encoder_hidden_dropout']
+		decoder_input_dropout = checkpoint['decoder_input_dropout']
 		feature_size = checkpoint['feature_size']
 		mlp_hidden_size = checkpoint['mlp_hidden_size']
 
@@ -296,8 +300,8 @@ class Learner(object):
 		self.feature_sampler,_,self.kl_func = model.choose_distribution(self.feature_distribution)
 		emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 
-		self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=encoder_rnn_layers, bidirectional=bidirectional_encoder)
-		self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=rnn_type)
+		self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=encoder_rnn_layers, bidirectional=bidirectional_encoder, hidden_dropout=encoder_hidden_dropout)
+		self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=rnn_type, input_dropout=decoder_input_dropout)
 		self.bag_of_data_decoder = model.MLP_To_k_Vecs(feature_size, mlp_hidden_size, input_size, 2)
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
