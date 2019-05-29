@@ -233,18 +233,21 @@ class ESN(torch.nn.Module):
 		out = [[] for batch_ix in range(batch_size)]
 		if hidden is None:
 			hidden = self.init_hidden(batch_size, packed_input.data.device)
+		zeros = torch.zeros_like(hidden[0]).to(packed_input.data.device)
 		for bs in packed_input.batch_sizes:
 			input_t = packed_input.data[:bs]
 			for l,h in enumerate(hidden):
 				out_tl = torch.stack([cells_dir[l].forward(input_t, h[dir_ix,:bs]) for dir_ix,cells_dir in enumerate(self.rnn_cells)])
-				prev_minus_new = hidden[l][:,:bs,:] - out_tl # num_directions x batch_size x hidden_size
-				hidden[l] = hidden[l] - torch.cat([prev_minus_new, torch.zeros_like(hidden[l][:,bs:,:])], dim=-2).to(packed_input.data.device)
+				hidden[l] = hidden[l] - torch.cat([
+											hidden[l][:,:bs,:] - out_tl, # num_directions x batch_size x hidden_size
+											zeros[:,bs:,:]],
+										dim=-2)
 				out_tl = out_tl.transpose(0,1).contiguous().view(bs,-1) # batch_size x hidden_size * num_directions
 				input_t = self.drop(out_tl)
 			for batch_ix in range(bs):
 				out[batch_ix].append(out_tl[batch_ix])
-		out = torch.nn.utils.rnn.pack_sequence([torch.stack(o) for o in out]).to(packed_input.data.device)
-		hidden = torch.stack(hidden).view(-1,batch_size,self.hidden_size).to(packed_input.data.device) # num_layers * num_directions x batch_size x hidden_size
+		out = torch.nn.utils.rnn.pack_sequence([torch.stack(o) for o in out])
+		hidden = torch.stack(hidden).view(-1,batch_size,self.hidden_size)
 		return out, hidden
 
 	def init_hidden(self, batch_size, device):
