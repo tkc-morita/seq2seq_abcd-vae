@@ -324,7 +324,7 @@ def get_parameters():
 	par_parser.add_argument('-M', '--momentum', type=float, default=0.0, help='Momentum for the storchastic gradient descent.')
 	par_parser.add_argument('-c', '--clip', type=float, default=1.0, help='Gradient clipping.')
 	par_parser.add_argument('-D', '--dropout', type=float, default=0.0, help='Dropout rate.')
-	par_parser.add_argument('--validation_batch_size', type=int, default=None, help='Batch size for validation. Same as for training b y default.')
+	par_parser.add_argument('--validation_batch_size', type=int, default=None, help='Batch size for validation. Same as for training by default.')
 	par_parser.add_argument('-R', '--rnn_type', type=str, default='GRU', help='Name of RNN to be used.')
 	par_parser.add_argument('--rnn_layers', type=int, default=1, help='# of hidden layers.')
 	par_parser.add_argument('--rnn_hidden_size', type=int, default=100, help='# of the RNN units.')
