@@ -61,7 +61,7 @@ class Learner(object):
 			self.feature_sampler, _, self.kl_func = model.choose_distribution(feature_distribution)
 			emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 			self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder)
-			self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, input_dropout=decoder_input_dropout, emission_sampler=emission_sampler, self_feedback=decoder_self_feedback)
+			self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=rnn_type, rnn_layers=rnn_layers, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback)
 			self.bag_of_data_decoder = model.MLP_To_k_Vecs(feature_size, mlp_hidden_size, input_size, 2) # Analogous to Zhao et al.'s (2017) "bag-of-words MLP".
 			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
 			logger.info('Features are assumed to be distributed according to {feature_distribution}.'.format(feature_distribution=feature_distribution))
@@ -72,8 +72,11 @@ class Learner(object):
 			logger.info("# of hidden units in the RNNs: {hs}".format(hs=rnn_hidden_size))
 			logger.info("# of hidden units in the MLPs: {hs}".format(hs=mlp_hidden_size))
 			logger.info("Encoder is bidirectional: {bidirectional_encoder}".format(bidirectional_encoder=bidirectional_encoder))
-			logger.info("Dropout rate in the input to the encoder: {do}".format(do=dropout))
+			logger.info("Dropout rate in the non-top layers of the encoder RNN: {do}".format(do=encoder_hidden_dropout))
 			logger.info("Self-feedback to the decoder: {decoder_self_feedback}".format(decoder_self_feedback=decoder_self_feedback))
+			if decoder_self_feedback:
+				logger.info("Dropout rate in the input to the decoder RNN: {do}".format(do=decoder_input_dropout))
+
 
 
 		self.encoder.to(self.device)
@@ -287,7 +290,7 @@ class Learner(object):
 		emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 
 		self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, bidirectional=bidirectional_encoder)
-		self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, emission_sampler=emission_sampler)
+		self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=rnn_type, rnn_layers=rnn_layers)
 		self.bag_of_data_decoder = model.MLP_To_k_Vecs(feature_size, mlp_hidden_size, input_size, 2)
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
@@ -323,7 +326,8 @@ def get_parameters():
 	par_parser.add_argument('-f', '--feature_size', type=int, default=13, help='# of dimensions of features into which data are encoded.')
 	par_parser.add_argument('-M', '--momentum', type=float, default=0.0, help='Momentum for the storchastic gradient descent.')
 	par_parser.add_argument('-c', '--clip', type=float, default=1.0, help='Gradient clipping.')
-	par_parser.add_argument('-D', '--dropout', type=float, default=0.0, help='Dropout rate.')
+	par_parser.add_argument('--encoder_hidden_dropout', type=float, default=0.0, help='Dropout rate in the non-top layers of the encoder RNN.')
+	par_parser.add_argument('--decoder_input_dropout', type=float, default=0.0, help='Dropout rate in the input to the decoder RNN.')
 	par_parser.add_argument('--validation_batch_size', type=int, default=None, help='Batch size for validation. Same as for training by default.')
 	par_parser.add_argument('-R', '--rnn_type', type=str, default='LSTM', help='Name of RNN to be used.')
 	par_parser.add_argument('--rnn_layers', type=int, default=1, help='# of hidden layers.')
@@ -378,7 +382,8 @@ if __name__ == '__main__':
 				save_dir,
 				rnn_type=parameters.rnn_type,
 				rnn_layers=parameters.rnn_layers,
-				dropout=parameters.dropout,
+				encoder_hidden_dropout=parameters.encoder_hidden_dropout,
+				decoder_input_dropout=parameters.decoder_input_dropout,
 				device = parameters.device,
 				seed = parameters.seed,
 				decoder_self_feedback=not parameters.greedy_decoder

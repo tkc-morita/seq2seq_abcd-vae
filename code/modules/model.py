@@ -78,10 +78,10 @@ class RNN_Variational_Decoder(torch.nn.Module):
 	Kingma and Willing 2014. Auto-Encoding Variational Bayes.
 	Bowman et al. 2016. Generating Sentences from a Continuous Space.
 	"""
-	def __init__(self, output_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type='LSTM', rnn_layers=1, dropout = 0.0, emission_sampler = None, self_feedback=True):
+	def __init__(self, output_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type='LSTM', rnn_layers=1, input_dropout = 0.0, self_feedback=True):
 		super(RNN_Variational_Decoder, self).__init__()
 		if not self_feedback:
-			dropout = 1.0
+			input_dropout = 1.0
 		hidden_size_total = rnn_layers*rnn_hidden_size
 		if rnn_type=='LSTM':
 			hidden_size_total *= 2
@@ -96,9 +96,8 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		self.to_parameters = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 2)
 		self.offset_predictor = MLP(rnn_hidden_size, mlp_hidden_size, 1)
 		assert rnn_layers==1, 'Only rnn_layers=1 is currently supported.'
-		assert not emission_sampler is None, 'emission_sampler must be provided.'
 		self.emission_sampler = emission_sampler
-		self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, dropout=dropout)
+		self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, input_dropout=input_dropout)
 
 	def forward(self, features, lengths, device):
 		"""
@@ -177,9 +176,9 @@ class RNN(torch.nn.Module):
 
 
 class RNN_Cell(torch.nn.Module):
-	def __init__(self, input_size, hidden_size, model_type='GRU', dropout = 0.0):
+	def __init__(self, input_size, hidden_size, model_type='LSTM', input_dropout = 0.0):
 		super(RNN_Cell, self).__init__()
-		self.drop = torch.nn.Dropout(dropout)
+		self.drop = torch.nn.Dropout(input_dropout)
 		self.cell = getattr(torch.nn, model_type+'Cell')(input_size, hidden_size)
 	
 	def forward(self, batched_input, init_hidden=None):
