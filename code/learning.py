@@ -33,7 +33,7 @@ def update_log_handler(file_dir):
 
 
 class Learner(object):
-	def __init__(self, input_size, rnn_hidden_size, mlp_hidden_size, feature_size, save_dir, rnn_type='GRU', rnn_layers=1, bidirectional_encoder=True, encoder_hidden_dropout = 0.0, decoder_input_dropout = 0.0, device=False, seed=1111, feature_distribution='isotropic_gaussian', emission_distribution='isotropic_gaussian', decoder_self_feedback=True):
+	def __init__(self, input_size, encoder_rnn_hidden_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, save_dir, rnn_type='GRU', encoder_rnn_layers=1, bidirectional_encoder=True, encoder_hidden_dropout = 0.0, decoder_input_dropout = 0.0, device=False, seed=1111, feature_distribution='isotropic_gaussian', emission_distribution='isotropic_gaussian', decoder_self_feedback=True):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
 		if not self.retrieval:
 			torch.manual_seed(seed)
@@ -60,20 +60,21 @@ class Learner(object):
 			self.emission_distribution =  emission_distribution
 			self.feature_sampler, _, self.kl_func = model.choose_distribution(feature_distribution)
 			emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
-			if encoder_hidden_dropout > 0.0 and rnn_layers==1:
+			if encoder_hidden_dropout > 0.0 and encoder_rnn_layers==1:
 				logger.warning('Non-zero dropout cannot be used for the single-layer encoder RNN (because there is no non-top hidden layers).')
 				logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
 				encoder_hidden_dropout = 0.0
-			self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder)
-			self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=rnn_type, rnn_layers=rnn_layers, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback)
+			self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder)
+			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback)
 			self.bag_of_data_decoder = model.MLP_To_k_Vecs(feature_size, mlp_hidden_size, input_size, 2) # Analogous to Zhao et al.'s (2017) "bag-of-words MLP".
 			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
 			logger.info('Features are assumed to be distributed according to {feature_distribution}.'.format(feature_distribution=feature_distribution))
 			logger.info('Conditioned on the features, data are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
 			logger.info('Random seed: {seed}'.format(seed = seed))
 			logger.info('Type of RNN used: {rnn_type}'.format(rnn_type=rnn_type))
-			logger.info("# of RNN hidden layers: {hl}".format(hl=rnn_layers))
-			logger.info("# of hidden units in the RNNs: {hs}".format(hs=rnn_hidden_size))
+			logger.info("# of RNN hidden layers in the encoder RNN: {hl}".format(hl=encoder_rnn_layers))
+			logger.info("# of hidden units in the encoder RNNs: {hs}".format(hs=encoder_rnn_hidden_size))
+			logger.info("# of hidden units in the decoder RNNs: {hs}".format(hs=decoder_rnn_hidden_size))
 			logger.info("# of hidden units in the MLPs: {hs}".format(hs=mlp_hidden_size))
 			logger.info("Encoder is bidirectional: {bidirectional_encoder}".format(bidirectional_encoder=bidirectional_encoder))
 			logger.info("Dropout rate in the non-top layers of the encoder RNN: {do}".format(do=encoder_hidden_dropout))
@@ -260,8 +261,9 @@ class Learner(object):
 			'gradient_clip':self.gradient_clip,
 			'input_size':self.encoder.rnn.input_size,
 			'rnn_type':self.encoder.rnn.mode,
-			'rnn_hidden_size':self.encoder.rnn.hidden_size,
-			'rnn_layers':self.encoder.rnn.num_layers,
+			'encoder_rnn_hidden_size':self.encoder.rnn.hidden_size,
+			'decoder_rnn_hidden_size':self.decoder.rnn_cell.cell.hidden_size,
+			'encoder_rnn_layers':self.encoder.rnn.num_layers,
 			'bidirectional_encoder':self.encoder.rnn.bidirectional,
 			'mlp_hidden_size':self.encoder.to_parameters.mlps[0].hidden_size,
 			'feature_size':self.decoder.feature2hidden.in_features,
@@ -282,8 +284,9 @@ class Learner(object):
 
 		input_size = checkpoint['input_size']
 		rnn_type = checkpoint['rnn_type']
-		rnn_hidden_size = checkpoint['rnn_hidden_size']
-		rnn_layers = checkpoint['rnn_layers']
+		encoder_rnn_hidden_size = checkpoint['encoder_rnn_hidden_size']
+		decoder_rnn_hidden_size = checkpoint['decoder_rnn_hidden_size']
+		encoder_rnn_layers = checkpoint['encoder_rnn_layers']
 		bidirectional_encoder = checkpoint['bidirectional_encoder']
 		feature_size = checkpoint['feature_size']
 		mlp_hidden_size = checkpoint['mlp_hidden_size']
@@ -293,8 +296,8 @@ class Learner(object):
 		self.feature_sampler,_,self.kl_func = model.choose_distribution(self.feature_distribution)
 		emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 
-		self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, bidirectional=bidirectional_encoder)
-		self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=rnn_type, rnn_layers=rnn_layers)
+		self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=encoder_rnn_layers, bidirectional=bidirectional_encoder)
+		self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=rnn_type)
 		self.bag_of_data_decoder = model.MLP_To_k_Vecs(feature_size, mlp_hidden_size, input_size, 2)
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
@@ -334,8 +337,9 @@ def get_parameters():
 	par_parser.add_argument('--decoder_input_dropout', type=float, default=0.0, help='Dropout rate in the input to the decoder RNN.')
 	par_parser.add_argument('--validation_batch_size', type=int, default=None, help='Batch size for validation. Same as for training by default.')
 	par_parser.add_argument('-R', '--rnn_type', type=str, default='LSTM', help='Name of RNN to be used.')
-	par_parser.add_argument('--rnn_layers', type=int, default=1, help='# of hidden layers.')
-	par_parser.add_argument('--rnn_hidden_size', type=int, default=100, help='# of the RNN units.')
+	par_parser.add_argument('--encoder_rnn_layers', type=int, default=1, help='# of hidden layers in the encoder RNN.')
+	par_parser.add_argument('--encoder_rnn_hidden_size', type=int, default=100, help='# of the RNN units in the encoder RNN.')
+	par_parser.add_argument('--decoder_rnn_hidden_size', type=int, default=100, help='# of the RNN units in the decoder RNN.')
 	par_parser.add_argument('--mlp_hidden_size', type=int, default=200, help='# of neurons in the hidden layer of the MLP transforms.')
 	par_parser.add_argument('--greedy_decoder', action='store_true', help='If selected, decoder becomes greedy and will not receive self-feedback.')
 	par_parser.add_argument('-j', '--job_id', type=str, default='NO_JOB_ID', help='Job ID. For users of computing clusters.')
@@ -380,12 +384,13 @@ if __name__ == '__main__':
 	# Get a model.
 	learner = Learner(
 				int(fft_frame_length / 2 + 1),
-				parameters.rnn_hidden_size,
+				parameters.encoder_rnn_hidden_size,
+				parameters.decoder_rnn_hidden_size,
 				parameters.mlp_hidden_size,
 				parameters.feature_size,
 				save_dir,
 				rnn_type=parameters.rnn_type,
-				rnn_layers=parameters.rnn_layers,
+				encoder_rnn_layers=parameters.encoder_rnn_layers,
 				encoder_hidden_dropout=parameters.encoder_hidden_dropout,
 				decoder_input_dropout=parameters.decoder_input_dropout,
 				device = parameters.device,
