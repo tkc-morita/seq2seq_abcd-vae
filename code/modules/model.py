@@ -49,7 +49,7 @@ class RNN_Variational_Encoder(torch.nn.Module):
 		if rnn_type == 'ESN':
 			pass
 		else:
-			self.rnn = getattr(torch.nn, model_type)(input_size, rnn_hidden_size, rnn_layers, dropout=hidden_dropout, bidirectional=bidirectional, batch_first=True)
+			self.rnn = getattr(torch.nn, rnn_type)(input_size, rnn_hidden_size, rnn_layers, dropout=hidden_dropout, bidirectional=bidirectional, batch_first=True)
 		hidden_size_total = rnn_layers * rnn_hidden_size
 		if bidirectional:
 			hidden_size_total *= 2
@@ -59,7 +59,7 @@ class RNN_Variational_Encoder(torch.nn.Module):
 
 	def forward(self, packed_input):
 		_, last_hidden = self.rnn(packed_input)
-		if self.rnn.rnn.mode == 'LSTM':
+		if self.rnn.mode == 'LSTM':
 			last_hidden = torch.stack(last_hidden)
 			batch_dim = 2
 		else:
