@@ -60,6 +60,10 @@ class Learner(object):
 			self.emission_distribution =  emission_distribution
 			self.feature_sampler, _, self.kl_func = model.choose_distribution(feature_distribution)
 			emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
+			if encoder_hidden_dropout > 0.0 and rnn_layers==1:
+				logger.warning('Non-zero dropout cannot be used for the single-layer encoder RNN (because there is no non-top hidden layers).')
+				logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
+				encoder_hidden_dropout = 0.0
 			self.encoder = model.RNN_Variational_Encoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=rnn_type, rnn_layers=rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder)
 			self.decoder = model.RNN_Variational_Decoder(input_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=rnn_type, rnn_layers=rnn_layers, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback)
 			self.bag_of_data_decoder = model.MLP_To_k_Vecs(feature_size, mlp_hidden_size, input_size, 2) # Analogous to Zhao et al.'s (2017) "bag-of-words MLP".
