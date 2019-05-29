@@ -321,7 +321,7 @@ def get_parameters():
 	par_parser.add_argument('input_root', type=str, help='Path to the root directory under which inputs are located.')
 	par_parser.add_argument('annotation_file', type=str, help='Path to the annotation csv file.')
 	par_parser.add_argument('-e', '--epochs', type=int, default=40, help='# of epochs to train the model.')
-	par_parser.add_argument('-b', '--batch_size', type=int, default=10, help='Batch size for training.')
+	par_parser.add_argument('-b', '--batch_size', type=int, default=16, help='Batch size for training.')
 	par_parser.add_argument('-l', '--learning_rate', type=float, default=1.0, help='Initial learning rate.')
 	par_parser.add_argument('-f', '--feature_size', type=int, default=13, help='# of dimensions of features into which data are encoded.')
 	par_parser.add_argument('-M', '--momentum', type=float, default=0.0, help='Momentum for the storchastic gradient descent.')
