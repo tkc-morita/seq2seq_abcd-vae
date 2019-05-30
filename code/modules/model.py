@@ -114,10 +114,8 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		flatten_emission_param1 = torch.tensor([]).to(hidden.device)
 		flatten_emission_param2 = torch.tensor([]).to(hidden.device)
 		flatten_out = torch.tensor([]).to(hidden.device)
-		# last_hidden = torch.tensor([])
 		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(hidden.device)
 		for bs in batch_sizes:
-			# last_hidden = torch.cat([hidden[bs:],last_hidden], dim=0) # hidden[bs:] is non-empty only if hidden.size(0) > bs.
 			hidden = self.rnn_cell(batched_input[:bs], self.shrink_hidden(hidden,bs))
 			rnn_out = self.get_output(hidden)
 			emission_param1,emission_param2 = self.to_parameters(rnn_out)
@@ -126,8 +124,7 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			flatten_emission_param1 = torch.cat([flatten_emission_param1, emission_param1], dim=0)
 			flatten_emission_param2 = torch.cat([flatten_emission_param2, emission_param2], dim=0)
 			flatten_out = torch.cat([flatten_out, batched_input], dim=0)
-		# last_hidden = torch.cat([hidden,last_hidden], dim=0)
-		flatten_offset_weights = self.offset_predictor(flatten_rnn_out).squeeze(-1) # Singleton list returned.
+		flatten_offset_weights = self.offset_predictor(flatten_rnn_out).squeeze(-1) # num_batches x 1 -> num_batches
 		return (flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out
 
 
