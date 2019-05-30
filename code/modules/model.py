@@ -295,30 +295,6 @@ class ESN(torch.nn.Module):
 			last_hidden_transposed = torch.cat([hidden_transposed[...,bs-bd:], last_hidden_transposed], dim=-1)
 		return flatten_hidden_transposed.t(), last_hidden_transposed.t().view(1,last_hidden_transposed.size(1),last_hidden_transposed.size(0))
 
-
-
-	# def forward(self, packed_input, hidden=None):
-	# 	batch_size = packed_input.batch_sizes[0]
-	# 	out = [[] for batch_ix in range(batch_size)]
-	# 	if hidden is None:
-	# 		hidden = self.init_hidden(batch_size, packed_input.data.device)
-	# 	zeros = torch.zeros_like(hidden[0]).to(packed_input.data.device)
-	# 	for bs in packed_input.batch_sizes:
-	# 		input_t = packed_input.data[:bs]
-	# 		for l,h in enumerate(hidden):
-	# 			out_tl = torch.stack([cells_dir[l].forward(input_t, h[dir_ix,:bs]) for dir_ix,cells_dir in enumerate(self.rnn_cells)])
-	# 			hidden[l] = hidden[l] - torch.cat([
-	# 										hidden[l][:,:bs,:] - out_tl, # num_directions x batch_size x hidden_size
-	# 										zeros[:,bs:,:]],
-	# 									dim=-2)
-	# 			out_tl = out_tl.transpose(0,1).contiguous().view(bs,-1) # batch_size x hidden_size * num_directions
-	# 			input_t = self.drop(out_tl)
-	# 		for batch_ix in range(bs):
-	# 			out[batch_ix].append(out_tl[batch_ix])
-	# 	out = torch.nn.utils.rnn.pack_sequence([torch.stack(o) for o in out])
-	# 	hidden = torch.stack(hidden).view(-1,batch_size,self.hidden_size)
-	# 	return out, hidden
-
 	def init_hidden(self, batch_size):
 		return torch.zeros((batch_size, self.hidden_size), requires_grad=False)
 
