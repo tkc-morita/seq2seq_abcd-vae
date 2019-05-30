@@ -8,8 +8,7 @@ def choose_distribution(distribution_name):
 	return distributions[distribution_name]
 
 def sample_from_isotropic_gaussian(mean, log_variance):
-	noise = torch.randn_like(mean)
-	return mean + (0.5 * log_variance).exp() * noise
+	return mean + (0.5 * log_variance).exp() * torch.randn_like(mean)
 
 def kl_isotropic_to_standard_gaussian(mean, log_variance, sum_only_over_val_dim = False):
 	"""
@@ -99,7 +98,7 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		self.emission_sampler = emission_sampler
 		self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, input_dropout=input_dropout, esn_leak=esn_leak)
 
-	def forward(self, features, lengths, device):
+	def forward(self, features, lengths=None, batch_sizes=None):
 		"""
 		The output is "flatten", meaning that it's PackedSequence.data.
 		This should be sufficient for the training purpose etc. while we can avoid padding, which would affect the autograd and thus requires masking in the loss calculation.
@@ -108,13 +107,15 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		hidden = self.reshape_hidden(hidden)
 
 		# Manual implementation of RNNs based on RNNCell.
-		batch_sizes = self._length_to_batch_sizes(lengths)
-		flatten_rnn_out = torch.tensor([]).to(device) # Correspond to PackedSequence.data.
-		flatten_emission_param1 = torch.tensor([]).to(device)
-		flatten_emission_param2 = torch.tensor([]).to(device)
-		flatten_out = torch.tensor([]).to(device)
+		assert (not lengths is None) or (not batch_sizes is None), 'Either lengths or batch_sizes must be given.'
+		if not lengths is None: # Mainly for the post training process.
+			batch_sizes = self._length_to_batch_sizes(lengths)
+		flatten_rnn_out = torch.tensor([]).to(hidden.device) # Correspond to PackedSequence.data.
+		flatten_emission_param1 = torch.tensor([]).to(hidden.device)
+		flatten_emission_param2 = torch.tensor([]).to(hidden.device)
+		flatten_out = torch.tensor([]).to(hidden.device)
 		# last_hidden = torch.tensor([])
-		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(device)
+		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(hidden.device)
 		for bs in batch_sizes:
 			# last_hidden = torch.cat([hidden[bs:],last_hidden], dim=0) # hidden[bs:] is non-empty only if hidden.size(0) > bs.
 			hidden = self.rnn_cell(batched_input[:bs], self.shrink_hidden(hidden,bs))

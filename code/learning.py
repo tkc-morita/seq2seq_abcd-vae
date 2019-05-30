@@ -120,7 +120,7 @@ class Learner(object):
 			feature_params = self.encoder(batched_input)
 			features = self.feature_sampler(*feature_params)
 			_, lengths = torch.nn.utils.rnn.pad_packed_sequence(batched_input, batch_first=True)
-			emission_params,flatten_offset_prediction,_ = self.decoder(features, lengths, self.device)
+			emission_params,flatten_offset_prediction,_ = self.decoder(features, batch_sizes=batched_input.batch_sizes)
 			params_BOD = self.bag_of_data_decoder(features)
 			params_BOD = [torch.nn.utils.rnn.pack_sequence([p[ix].expand(l,-1) for ix,l in enumerate(lengths)]).data
 									for p in params_BOD] # Can/should be .expand() rather than .repeat() for aurograd. cf. https://discuss.pytorch.org/t/torch-repeat-and-torch-expand-which-to-use/27969
@@ -183,7 +183,7 @@ class Learner(object):
 				feature_params = self.encoder(batched_input)
 				features = self.feature_sampler(*feature_params)
 				_, lengths = torch.nn.utils.rnn.pad_packed_sequence(batched_input, batch_first=True)
-				emission_params,flatten_offset_prediction,_ = self.decoder(features, lengths, self.device)
+				emission_params,flatten_offset_prediction,_ = self.decoder(features, batch_sizes=batched_input.batch_sizes)
 				params_BOD = self.bag_of_data_decoder(features)
 				params_BOD = [torch.nn.utils.rnn.pack_sequence([p[ix].expand(l,-1) for ix,l in enumerate(lengths)]).data
 										for p in params_BOD] # Should be .expand() rather than .repeat() for aurograd(?).
