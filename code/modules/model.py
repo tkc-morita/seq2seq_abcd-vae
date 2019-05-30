@@ -110,11 +110,11 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		assert (not lengths is None) or (not batch_sizes is None), 'Either lengths or batch_sizes must be given.'
 		if not lengths is None: # Mainly for the post training process.
 			batch_sizes = self._length_to_batch_sizes(lengths)
-		flatten_rnn_out = torch.tensor([]).to(hidden.device) # Correspond to PackedSequence.data.
-		flatten_emission_param1 = torch.tensor([]).to(hidden.device)
-		flatten_emission_param2 = torch.tensor([]).to(hidden.device)
-		flatten_out = torch.tensor([]).to(hidden.device)
-		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(hidden.device)
+		flatten_rnn_out = torch.tensor([]).to(features.device) # Correspond to PackedSequence.data.
+		flatten_emission_param1 = torch.tensor([]).to(features.device)
+		flatten_emission_param2 = torch.tensor([]).to(features.device)
+		flatten_out = torch.tensor([]).to(features.device)
+		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(features.device)
 		for bs in batch_sizes:
 			hidden = self.rnn_cell(batched_input[:bs], self.shrink_hidden(hidden,bs))
 			rnn_out = self.get_output(hidden)
@@ -160,7 +160,7 @@ class RNN_Cell(torch.nn.Module):
 		self.drop = torch.nn.Dropout(input_dropout)
 		self.mode = model_type
 		if model_type == 'ESN':
-			self.cell = ESNCell(input_size, hidden_size, sparse_tensor=False, leak=esn_leak)
+			self.cell = ESNCell(input_size, hidden_size, leak=esn_leak)
 		else:
 			self.cell = getattr(torch.nn, model_type+'Cell')(input_size, hidden_size)
 	
@@ -210,49 +210,120 @@ class ESN(torch.nn.Module):
 		self.batch_first = batch_first
 		self.leak = leak
 
-		# ESNCell(input_size, hidden_size, bias=bias, leak=leak, q=q, sparsity=sparsity)
+
 		internal_input_size = hidden_size
 		if bidirectional:
 			internal_input_size *= 2
-			backward_cells = [ESNCell(input_size, hidden_size, bias=bias, leak=leak, q=q, sparsity=sparsity)]
-			backward_cells += [ESNCell(internal_input_size, hidden_size, bias=bias, leak=leak, q=q, sparsity=sparsity) for l in range(num_layers-1)]
-			self.rnn_cells = [torch.nn.ModuleList(backward_cells)]
-		else:
-			self.rnn_cells = []
-		forward_cells = [ESNCell(input_size, hidden_size, bias=bias, leak=leak, q=q, sparsity=sparsity)]
-		forward_cells += [ESNCell(internal_input_size, hidden_size, bias=bias, leak=leak, q=q, sparsity=sparsity) for l in range(num_layers-1)]
-		self.rnn_cells = torch.nn.ModuleList([torch.nn.ModuleList(forward_cells)] + self.rnn_cells)
-		self.drop = torch.nn.Dropout(p=dropout)
+			self._init_parameters(q, internal_input_size, sparsity, '_reverse')
+		# 0th layer
+		self._init_parameters(q, internal_input_size, sparsity)
 
+		self.drop = torch.nn.Dropout(p=dropout)
+		self.activation = torch.nn.Tanh()
+
+	def _init_parameters(self, q, internal_input_size, sparsity, parname_suffix=''):
+		# input2hidden matrix.
+		# Either either -3.0/input_size or 3.0/input_size. 
+		# tanh(x) almost ceils and floors at x=3 and -3, 
+		# so the sum should stay in the range most of the time.
+		# 0th layer
+		import scipy.stats as spstats
+		input_quantile = spstats.binom.ppf(q, self.input_size, 0.5).astype('float32')
+		self.register_parameter(
+				'weight_ih_l0'+parname_suffix,
+				torch.nn.Parameter(
+					torch.randint(2, (self.hidden_size, self.input_size), dtype=torch.float32)
+					* (6.0 / input_quantile)
+					- (3.0 / input_quantile),
+					requires_grad=False)
+				)
+
+		# Intermediate layers.
+		internal_quantile = spstats.binom.ppf(q, internal_input_size, 0.5).astype('float32')
+		[self.register_parameter(
+				'weight_ih_l{l}'.format(l=l)+parname_suffix,
+				torch.nn.Parameter(
+					torch.randint(2, (self.hidden_size, internal_input_size), dtype=torch.float32)
+					* (6.0 / internal_quantile)
+					- (3.0 / internal_quantile),
+					requires_grad=False)
+				) for l in range(1,self.num_layers)]
+
+		# hidden2hidden matrix.
+		for l in range(self.num_layers):
+			self.register_parameter(
+					'weight_hh_l{l}'.format(l=l)+parname_suffix,
+					torch.nn.Parameter(
+						torch.randn(self.hidden_size, self.hidden_size),
+						requires_grad=False)
+					)
+			weight_hh = getattr(self, 'weight_hh_l{l}'.format(l=l)+parname_suffix)
+			weight_hh.data = torch.nn.Dropout(p=1.0-sparsity)(weight_hh.data)
+			eig_val,_ = torch.eig(weight_hh)
+			weight_hh /= (eig_val.pow(2).sum(-1)).max().sqrt() / 0.99 # Adjust by the spectral radius.
 
 
 	def forward(self, packed_input, hidden=None):
-		batch_size = packed_input.batch_sizes[0]
-		out = [[] for batch_ix in range(batch_size)]
-		if hidden is None:
-			hidden = self.init_hidden(batch_size, packed_input.data.device)
-		zeros = torch.zeros_like(hidden[0]).to(packed_input.data.device)
-		for bs in packed_input.batch_sizes:
-			input_t = packed_input.data[:bs]
-			for l,h in enumerate(hidden):
-				out_tl = torch.stack([cells_dir[l].forward(input_t, h[dir_ix,:bs]) for dir_ix,cells_dir in enumerate(self.rnn_cells)])
-				hidden[l] = hidden[l] - torch.cat([
-											hidden[l][:,:bs,:] - out_tl, # num_directions x batch_size x hidden_size
-											zeros[:,bs:,:]],
-										dim=-2)
-				out_tl = out_tl.transpose(0,1).contiguous().view(bs,-1) # batch_size x hidden_size * num_directions
-				input_t = self.drop(out_tl)
-			for batch_ix in range(bs):
-				out[batch_ix].append(out_tl[batch_ix])
-		out = torch.nn.utils.rnn.pack_sequence([torch.stack(o) for o in out])
-		hidden = torch.stack(hidden).view(-1,batch_size,self.hidden_size)
-		return out, hidden
+		flatten_input = packed_input.data
+		last_hidden = torch.tensor([]).to(packed_input.data.device)
+		for l in range(self.num_layers):
+			flatten_hidden, last_hidden_l = self._forward_per_layer(flatten_input, packed_input.batch_sizes, 'weight_ih_l{l}'.format(l=l), 'weight_hh_l{l}'.format(l=l))
+			last_hidden = torch.cat([last_hidden, last_hidden_l], dim=0)
+			if self.bidirectional:
+				flatten_hidden_back, last_hidden_l_back = self._forward_per_layer(flatten_input, packed_input.batch_sizes, 'weight_ih_l{l}_reverse'.format(l=l), 'weight_hh_l{l}_reverse'.format(l=l))
+				flatten_hidden = torch.cat([flatten_hidden, flatten_hidden_back], dim=-1)
+				last_hidden = torch.cat([last_hidden, last_hidden_l_back], dim=0)
+			flatten_input = self.drop(flatten_hidden)
+		return flatten_hidden, last_hidden
 
-	def init_hidden(self, batch_size, device):
-		return [torch.zeros((self.bidirectional+1, batch_size, self.hidden_size), requires_grad=False).to(device) for l in range(self.num_layers)]
+
+	def _forward_per_layer(self, flatten_input, batch_sizes, weight_ih_name, weight_hh_name):
+		# input2hidden
+		input2hidden_transposed = getattr(self, weight_ih_name).mm(flatten_input.t())
+		# hidden2hidden
+		hidden_transposed = self.init_hidden(batch_sizes[0]).to(input2hidden_transposed.device).t()
+		flatten_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
+		last_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
+		batch_decreases = torch.cat([batch_sizes[:-1]-batch_sizes[1:], torch.tensor([batch_sizes[-1]])]).to(input2hidden_transposed.device)
+		for bs,bd in zip(batch_sizes, batch_decreases):
+			hidden_transposed = hidden_transposed[...,:bs]
+			input2hidden_at_t_transposed = input2hidden_transposed[...,:bs]
+			hidden2hidden_at_t_transposed = getattr(self, weight_hh_name).to_sparse().mm(hidden_transposed)
+			hidden_transposed = (1.0 - self.leak) * hidden_transposed + self.leak * self.activation(input2hidden_at_t_transposed + hidden2hidden_at_t_transposed)
+			flatten_hidden_transposed = torch.cat([flatten_hidden_transposed,hidden_transposed], dim=-1)
+			input2hidden_transposed = input2hidden_transposed[...,bs:]
+			last_hidden_transposed = torch.cat([hidden_transposed[...,bs-bd:], last_hidden_transposed], dim=-1)
+		return flatten_hidden_transposed.t(), last_hidden_transposed.t().view(1,last_hidden_transposed.size(1),last_hidden_transposed.size(0))
+
+
+
+	# def forward(self, packed_input, hidden=None):
+	# 	batch_size = packed_input.batch_sizes[0]
+	# 	out = [[] for batch_ix in range(batch_size)]
+	# 	if hidden is None:
+	# 		hidden = self.init_hidden(batch_size, packed_input.data.device)
+	# 	zeros = torch.zeros_like(hidden[0]).to(packed_input.data.device)
+	# 	for bs in packed_input.batch_sizes:
+	# 		input_t = packed_input.data[:bs]
+	# 		for l,h in enumerate(hidden):
+	# 			out_tl = torch.stack([cells_dir[l].forward(input_t, h[dir_ix,:bs]) for dir_ix,cells_dir in enumerate(self.rnn_cells)])
+	# 			hidden[l] = hidden[l] - torch.cat([
+	# 										hidden[l][:,:bs,:] - out_tl, # num_directions x batch_size x hidden_size
+	# 										zeros[:,bs:,:]],
+	# 									dim=-2)
+	# 			out_tl = out_tl.transpose(0,1).contiguous().view(bs,-1) # batch_size x hidden_size * num_directions
+	# 			input_t = self.drop(out_tl)
+	# 		for batch_ix in range(bs):
+	# 			out[batch_ix].append(out_tl[batch_ix])
+	# 	out = torch.nn.utils.rnn.pack_sequence([torch.stack(o) for o in out])
+	# 	hidden = torch.stack(hidden).view(-1,batch_size,self.hidden_size)
+	# 	return out, hidden
+
+	def init_hidden(self, batch_size):
+		return torch.zeros((batch_size, self.hidden_size), requires_grad=False)
 
 class ESNCell(torch.nn.Module):
-	def __init__(self, input_size, hidden_size, bias=False, leak=1.0, q=0.95, sparsity=0.1, sparse_tensor=True):
+	def __init__(self, input_size, hidden_size, bias=False, leak=1.0, q=0.95, sparsity=0.1):
 		super(ESNCell, self).__init__()
 		self.input_size = input_size
 		self.hidden_size = hidden_size
@@ -275,6 +346,10 @@ class ESNCell(torch.nn.Module):
 		self.weight_ih *= 6.0 / quantile
 		self.weight_ih -= 3.0 / quantile
 
+		# hidden2hidden matrix.
+		# Sparse tensor is under development in PyTorch and the autograd etc. are currently unsupported. 
+		# This module will follow some computation requiring autograd,
+		# so we will not use the sparse representation right now.
 		self.register_parameter(
 				'weight_hh',
 				torch.nn.Parameter(
@@ -284,48 +359,17 @@ class ESNCell(torch.nn.Module):
 		self.weight_hh.data = torch.nn.Dropout(p=1.0-sparsity)(self.weight_hh.data)
 		eig_val,_ = torch.eig(self.weight_hh)
 		self.weight_hh /= (eig_val.pow(2).sum(-1)).max().sqrt() / 0.99 # Adjust by the spectral radius.
-		if sparse_tensor: # Sparse tensor is under development in PyTorch and this program will also be updated when the autograd etc. are supported.
-			self.forward = self._forward_sparse
-		else:
-			self.forward = self._forward_dense
-			# self.weight_hh.data = self.weight_hh.data.to_sparse() # Sparse representation.
 
 		self.activation = torch.nn.Tanh()
 
 
-	def _forward_dense(self, batched_input, hidden=None):
+	def forward(self, batched_input, hidden=None):
 		if hidden is None:
 			hidden = self.init_hidden(batched_input.size(0)).to(batched_input.device)
 		update = self.activation(self.weight_ih.mm(batched_input.t()) + self.weight_hh.mm(hidden.t())).t()
 		hidden = (1.0 - self.leak) * hidden + self.leak * update
 		return hidden
 
-	def _forward_sparse(self, batched_input, hidden=None):
-		if hidden is None:
-			hidden = self.init_hidden(batched_input.size(0)).to(batched_input.device)
-		update = self.activation(self.weight_ih.mm(batched_input.t()) + self.weight_hh.to_sparse().mm(hidden.t())).t()
-		hidden = (1.0 - self.leak) * hidden + self.leak * update
-		return hidden
 
 	def init_hidden(self, batch_size):
 		return torch.zeros((batch_size, self.hidden_size), requires_grad=False)
-
-
-	# def state_dict(self, *args, **kwargs):
-	# 	"""
-	# 	torch.sparse.FloatTensor cannot be stored currently.
-	# 	Turn them into dense.
-	# 	"""
-	# 	if self.weight_hh.is_sparse:
-	# 		self.weight_hh.data = self.weight_hh.data.to_dense()
-	# 	return super().state_dict(*args, **kwargs)
-
-	# def load_state_dict(self, *args, **kwargs):
-	# 	if self.weight_hh.is_sparse:
-	# 		self.weight_hh.data = self.weight_hh.data.to_dense()
-	# 		to_sparse = True
-	# 	else:
-	# 		to_sparse = False
-	# 	super().load_state_dict(*args, **kwargs)
-	# 	if to_sparse:
-	# 		self.weight_hh.data = self.weight_hh.data.to_sparse()
