@@ -111,22 +111,22 @@ class Learner(object):
 
 		num_batches = dataloader.get_num_batches()
 
-		for batch_ix,(batched_input, is_offset, _) in enumerate(dataloader, 1):
-			batched_input = batched_input.to(self.device)
+		for batch_ix,(packed_input, is_offset, _) in enumerate(dataloader, 1):
+			packed_input = packed_input.to(self.device)
 			is_offset = is_offset.to(self.device)
 
 			self.optimizer.zero_grad()
 
-			feature_params = self.encoder(batched_input)
+			feature_params = self.encoder(packed_input)
 			features = self.feature_sampler(*feature_params)
-			_, lengths = torch.nn.utils.rnn.pad_packed_sequence(batched_input, batch_first=True)
-			emission_params,flatten_offset_prediction,_ = self.decoder(features, batch_sizes=batched_input.batch_sizes)
+			_, lengths = torch.nn.utils.rnn.pad_packed_sequence(packed_input, batch_first=True)
+			emission_params,flatten_offset_prediction,_ = self.decoder(features, batch_sizes=packed_input.batch_sizes)
 			params_BOD = self.bag_of_data_decoder(features)
 			params_BOD = [torch.nn.utils.rnn.pack_sequence([p[ix].expand(l,-1) for ix,l in enumerate(lengths)]).data
 									for p in params_BOD] # Can/should be .expand() rather than .repeat() for aurograd. cf. https://discuss.pytorch.org/t/torch-repeat-and-torch-expand-which-to-use/27969
 
-			emission_loss_per_batch = -self.log_pdf_emission(batched_input.data, *emission_params)
-			emission_loss_BOD_per_batch = -self.log_pdf_emission(batched_input.data, *params_BOD)
+			emission_loss_per_batch = -self.log_pdf_emission(packed_input.data, *emission_params)
+			emission_loss_BOD_per_batch = -self.log_pdf_emission(packed_input.data, *params_BOD)
 			end_prediction_loss_per_batch = self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data)
 			kl_loss_per_batch = self.kl_func(*feature_params)
 			loss = emission_loss_per_batch + end_prediction_loss_per_batch + kl_loss_per_batch + emission_loss_BOD_per_batch
@@ -176,20 +176,20 @@ class Learner(object):
 		num_batches = dataloader.get_num_batches()
 
 		with torch.no_grad():
-			for batch_ix, (batched_input, is_offset, _) in enumerate(dataloader, 1):
-				batched_input = batched_input.to(self.device)
+			for batch_ix, (packed_input, is_offset, _) in enumerate(dataloader, 1):
+				packed_input = packed_input.to(self.device)
 				is_offset = is_offset.to(self.device)
 
-				feature_params = self.encoder(batched_input)
+				feature_params = self.encoder(packed_input)
 				features = self.feature_sampler(*feature_params)
-				_, lengths = torch.nn.utils.rnn.pad_packed_sequence(batched_input, batch_first=True)
-				emission_params,flatten_offset_prediction,_ = self.decoder(features, batch_sizes=batched_input.batch_sizes)
+				_, lengths = torch.nn.utils.rnn.pad_packed_sequence(packed_input, batch_first=True)
+				emission_params,flatten_offset_prediction,_ = self.decoder(features, batch_sizes=packed_input.batch_sizes)
 				params_BOD = self.bag_of_data_decoder(features)
 				params_BOD = [torch.nn.utils.rnn.pack_sequence([p[ix].expand(l,-1) for ix,l in enumerate(lengths)]).data
 										for p in params_BOD] # Should be .expand() rather than .repeat() for aurograd(?).
 
-				emission_loss += -self.log_pdf_emission(batched_input.data, *emission_params).item()
-				emission_loss_BOD += -self.log_pdf_emission(batched_input.data, *params_BOD).item()
+				emission_loss += -self.log_pdf_emission(packed_input.data, *emission_params).item()
+				emission_loss_BOD += -self.log_pdf_emission(packed_input.data, *params_BOD).item()
 				end_prediction_loss += self.bce_with_logits_loss(flatten_offset_prediction,is_offset.data).item()
 				kl_loss += self.kl_func(*feature_params).item()
 
