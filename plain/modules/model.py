@@ -91,9 +91,6 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			self.rnn_cell_reverse = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, input_dropout=input_dropout, esn_leak=esn_leak)
 			self.offset_predictor_reverse = MLP(rnn_hidden_size, mlp_hidden_size, 1)
 			self.to_parameters_reverse = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 2)
-			# self._forward = self._forward_bidirectional
-		# else:
-			# self._forward = self._forward_unidirectional
 		self.feature2hidden = torch.nn.Linear(feature_size, hidden_size_total)
 		self.to_parameters = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 2)
 		self.offset_predictor = MLP(rnn_hidden_size, mlp_hidden_size, 1)
@@ -141,41 +138,66 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		flatten_emission_param2 = torch.cat(flatten_emission_param2, dim=0)
 		flatten_out = torch.cat(flatten_out, dim=0)
 		flatten_offset_weights = self.offset_predictor(flatten_rnn_out).squeeze(-1) # num_batches x 1 -> num_batches
-		return (flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out
+		return (((flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out),)
 
-	def _forward_bidirectional(self, features, lengths=None, batch_sizes=None):
+	def _forward_bidirectional(self, features, batch_sizes):
 		"""
 		The output is "flatten", meaning that it's PackedSequence.data.
 		This should be sufficient for the training purpose etc. while we can avoid padding, which would affect the autograd and thus requires masking in the loss calculation.
 		"""
-		hidden = self.feature2hidden(features) # batch_size x hidden_size_total
-		hidden = hidden.view(-1,2)
-		hidden_reverse = hidden[:,1]
-		hidden_reverse = self.reshape_hidden(hidden_reverse)
-		hidden = hidden[:,0]
+		hidden = self.feature2hidden(features).view(features.size(0),-1,2)
+		hidden_reverse_full = hidden[:,:,1]
+		hidden = hidden[:,:,0]
 		hidden = self.reshape_hidden(hidden)
+		hidden_reverse_full = self.reshape_hidden(hidden_reverse_full)
 
-		# Manual implementation of RNNs based on RNNCell.
-		assert (not lengths is None) or (not batch_sizes is None), 'Either lengths or batch_sizes must be given.'
-		if not lengths is None: # Mainly for the post training process.
-			batch_sizes = self._length_to_batch_sizes(lengths)
-		flatten_rnn_out = torch.tensor([]).to(features.device) # Correspond to PackedSequence.data.
-		flatten_emission_param1 = torch.tensor([]).to(features.device)
-		flatten_emission_param2 = torch.tensor([]).to(features.device)
-		flatten_out = torch.tensor([]).to(features.device)
+		flatten_rnn_out = []
+		flatten_emission_param1 = []
+		flatten_emission_param2 = []
+		flatten_out = []
+		flatten_rnn_out_reverse = []
+		flatten_emission_param1_reverse = []
+		flatten_emission_param2_reverse = []
+		flatten_out_reverse = []
 		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(features.device)
-
-		for bs in batch_sizes:
+		zero_input_fullsize = torch.zeros_like(batched_input).to(features.device)
+		previous_bs_reverse = batch_sizes[-1]
+		batched_input_reverse = zero_input_fullsize[:previous_bs_reverse]
+		hidden_reverse = hidden_reverse_full[:previous_bs_reverse]
+		for t in range(len(batch_sizes)):
+			bs = batch_sizes[t]
+			bs_reverse = batch_sizes[-t-1]
 			hidden = self.rnn_cell(batched_input[:bs], self.shrink_hidden(hidden,bs))
+			hidden_reverse = self.rnn_cell_reverse(torch.cat([batched_input_reverse, zero_input_fullsize[previous_bs_reverse:bs_reverse]], dim=0), torch.cat([hidden_reverse, hidden_reverse_full[previous_bs_reverse:bs_reverse]], dim=0))
+			previous_bs_reverse = bs_reverse
 			rnn_out = self.get_output(hidden)
+			rnn_out_reverse = self.get_output(hidden_reverse)
 			emission_param1,emission_param2 = self.to_parameters(rnn_out)
+			emission_param1_reverse, emission_param2_reverse = self.to_parameters_reverse(rnn_out_reverse)
 			batched_input = self.emission_sampler(emission_param1, emission_param2)
-			flatten_rnn_out = torch.cat([flatten_rnn_out,rnn_out], dim=0)
-			flatten_emission_param1 = torch.cat([flatten_emission_param1, emission_param1], dim=0)
-			flatten_emission_param2 = torch.cat([flatten_emission_param2, emission_param2], dim=0)
-			flatten_out = torch.cat([flatten_out, batched_input], dim=0)
+			batched_input_reverse = self.emission_sampler(emission_param1_reverse, emission_param2_reverse)
+			flatten_rnn_out += [rnn_out]
+			flatten_emission_param1 += [emission_param1]
+			flatten_emission_param2 += [emission_param2]
+			flatten_out += [batched_input]
+			flatten_rnn_out_reverse = [rnn_out_reverse] + flatten_rnn_out_reverse
+			flatten_emission_param1_reverse = [emission_param1_reverse] + flatten_emission_param1_reverse
+			flatten_emission_param2_reverse = [emission_param2_reverse] + flatten_emission_param2_reverse
+			flatten_out_reverse = [batched_input_reverse] + flatten_out_reverse
+		flatten_rnn_out = torch.cat(flatten_rnn_out, dim=0)
+		flatten_emission_param1 = torch.cat(flatten_emission_param1, dim=0)
+		flatten_emission_param2 = torch.cat(flatten_emission_param2, dim=0)
+		flatten_out = torch.cat(flatten_out, dim=0)
+		flatten_rnn_out_reverse = torch.cat(flatten_rnn_out_reverse, dim=0)
+		flatten_emission_param1_reverse = torch.cat(flatten_emission_param1_reverse, dim=0)
+		flatten_emission_param2_reverse = torch.cat(flatten_emission_param2_reverse, dim=0)
+		flatten_out_reverse = torch.cat(flatten_out_reverse, dim=0)
 		flatten_offset_weights = self.offset_predictor(flatten_rnn_out).squeeze(-1) # num_batches x 1 -> num_batches
-		return (flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out
+		flatten_offset_weights_reverse = self.offset_predictor_reverse(flatten_rnn_out_reverse).squeeze(-1)
+		return (
+				((flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out),
+				((flatten_emission_param1_reverse,flatten_emission_param2_reverse), flatten_offset_weights_reverse, flatten_out_reverse),
+				)
 
 	def _split_into_hidden_and_cell(self, reshaped_hidden):
 		return (reshaped_hidden[...,0],reshaped_hidden[...,1])

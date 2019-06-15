@@ -34,7 +34,7 @@ def update_log_handler(file_dir):
 
 
 class Learner(object):
-	def __init__(self, input_size, encoder_rnn_hidden_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, save_dir, encoder_rnn_type='LSTM', decoder_rnn_type='LSTM', encoder_rnn_layers=1, bidirectional_encoder=True, encoder_hidden_dropout = 0.0, decoder_input_dropout = 0.0, device=False, seed=1111, feature_distribution='isotropic_gaussian', emission_distribution='isotropic_gaussian', decoder_self_feedback=True, esn_leak=1.0):
+	def __init__(self, input_size, encoder_rnn_hidden_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, save_dir, encoder_rnn_type='LSTM', decoder_rnn_type='LSTM', encoder_rnn_layers=1, bidirectional_encoder=True, bidirectional_decoder=False, right2left_decoder_weight=0.5, encoder_hidden_dropout = 0.0, decoder_input_dropout = 0.0, device=False, seed=1111, feature_distribution='isotropic_gaussian', emission_distribution='isotropic_gaussian', decoder_self_feedback=True, esn_leak=1.0):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
 		if not self.retrieval:
 			torch.manual_seed(seed)
@@ -66,7 +66,7 @@ class Learner(object):
 				logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
 				encoder_hidden_dropout = 0.0
 			self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
-			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak)
+			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder)
 			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
 			logger.info('Features are assumed to be distributed according to {feature_distribution}.'.format(feature_distribution=feature_distribution))
 			logger.info('Conditioned on the features, data are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
@@ -78,6 +78,12 @@ class Learner(object):
 			logger.info("# of hidden units in the decoder RNNs: {hs}".format(hs=decoder_rnn_hidden_size))
 			logger.info("# of hidden units in the MLPs: {hs}".format(hs=mlp_hidden_size))
 			logger.info("Encoder is bidirectional: {bidirectional_encoder}".format(bidirectional_encoder=bidirectional_encoder))
+			logger.info("Decoder is bidirectional: {bidirectional_decoder}".format(bidirectional_decoder=bidirectional_decoder))
+			self.right2left_decoder_weight = right2left_decoder_weight
+			if bidirectional_decoder:
+				logger.info("Probability of emission by the right-to-left decoder: {p}".format(p=right2left_decoder_weight))
+			else:
+				self.right2left_decoder_weight = 0.0
 			logger.info("Dropout rate in the non-top layers of the encoder RNN: {do}".format(do=encoder_hidden_dropout))
 			logger.info("Self-feedback to the decoder: {decoder_self_feedback}".format(decoder_self_feedback=decoder_self_feedback))
 			if decoder_self_feedback:
@@ -116,10 +122,11 @@ class Learner(object):
 
 			feature_params = self.encoder(packed_input)
 			features = self.feature_sampler(*feature_params)
-			emission_params,flatten_offset_prediction,_ = self.decoder(features, batch_sizes=packed_input.batch_sizes)
-
-			emission_loss_per_batch = -self.log_pdf_emission(packed_input.data, *emission_params)
-			end_prediction_loss_per_batch = self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data)
+			emission_loss_per_batch = 0.0
+			end_prediction_loss_per_batch = 0.0
+			for (emission_params,flatten_offset_prediction,_), loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes), (1.0-self.right2left_decoder_weight, self.right2left_decoder_weight)):
+				emission_loss_per_batch += -self.log_pdf_emission(packed_input.data, *emission_params) * loss_weight
+				end_prediction_loss_per_batch += self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data) * loss_weight
 			kl_loss_per_batch = self.kl_func(*feature_params)
 			loss = emission_loss_per_batch + end_prediction_loss_per_batch + kl_loss_per_batch
 			loss.backward()
@@ -168,10 +175,9 @@ class Learner(object):
 
 				feature_params = self.encoder(packed_input)
 				features = self.feature_sampler(*feature_params)
-				emission_params,flatten_offset_prediction,_ = self.decoder(features, batch_sizes=packed_input.batch_sizes)
-
-				emission_loss += -self.log_pdf_emission(packed_input.data, *emission_params).item()
-				end_prediction_loss += self.bce_with_logits_loss(flatten_offset_prediction,is_offset.data).item()
+				for (emission_params,flatten_offset_prediction,_), loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes), (1.0-self.right2left_decoder_weight, self.right2left_decoder_weight)):
+					emission_loss += -self.log_pdf_emission(packed_input.data, *emission_params).item() * loss_weight
+					end_prediction_loss += self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data).item() * loss_weight
 				kl_loss += self.kl_func(*feature_params).item()
 
 				logger.info('{batch_ix}/{num_batches} validation batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
@@ -247,6 +253,8 @@ class Learner(object):
 			'decoder_rnn_hidden_size':self.decoder.rnn_cell.cell.hidden_size,
 			'encoder_rnn_layers':self.encoder.rnn.num_layers,
 			'bidirectional_encoder':self.encoder.rnn.bidirectional,
+			'bidirectional_decoder':self.decoder.bidirectional,
+			'right2left_decoder_weight':self.right2left_decoder_weight,
 			'encoder_hidden_dropout':self.encoder.rnn.dropout,
 			'decoder_input_dropout':self.decoder.rnn_cell.drop.p,
 			'mlp_hidden_size':self.encoder.to_parameters.mlps[0].hidden_size,
@@ -277,6 +285,8 @@ class Learner(object):
 		decoder_rnn_hidden_size = checkpoint['decoder_rnn_hidden_size']
 		encoder_rnn_layers = checkpoint['encoder_rnn_layers']
 		bidirectional_encoder = checkpoint['bidirectional_encoder']
+		bidirectional_decoder = checkpoint['bidirectional_decoder']
+		self.right2left_decoder_weight = checkpoint['right2left_decoder_weight']
 		encoder_hidden_dropout = checkpoint['encoder_hidden_dropout']
 		decoder_input_dropout = checkpoint['decoder_input_dropout']
 		feature_size = checkpoint['feature_size']
@@ -293,7 +303,7 @@ class Learner(object):
 		emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 
 		self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, bidirectional=bidirectional_encoder, hidden_dropout=encoder_hidden_dropout, esn_leak=esn_leak)
-		self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, esn_leak=esn_leak)
+		self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, esn_leak=esn_leak, bidirectional=bidirectional_decoder)
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
 
@@ -338,6 +348,8 @@ def get_parameters():
 	par_parser.add_argument('--mlp_hidden_size', type=int, default=200, help='# of neurons in the hidden layer of the MLP transforms.')
 	par_parser.add_argument('--greedy_decoder', action='store_true', help='If selected, decoder becomes greedy and will not receive self-feedback.')
 	par_parser.add_argument('--esn_leak', type=float, default=1.0, help='Leak for the echo-state network. Ignored if the RNN type is not ESN.')
+	par_parser.add_argument('--bidirectional_decoder', action='store_true', help='If selected, use the weighted sum of losses from left-to-right and right-to-left decoders (to avoid the uninformative latent variable problem).')
+	par_parser.add_argument('--right2left_decoder_weight', type=float, default=0.5, help='The weight of the right-to-left decoder when bidirectional_decoder==True.')
 	par_parser.add_argument('-j', '--job_id', type=str, default='NO_JOB_ID', help='Job ID. For users of computing clusters.')
 	par_parser.add_argument('-s', '--seed', type=int, default=1111, help='random seed')
 	par_parser.add_argument('-d', '--device', type=str, default='cpu', help='Computing device.')
@@ -395,7 +407,9 @@ if __name__ == '__main__':
 				decoder_input_dropout=parameters.decoder_input_dropout,
 				device = parameters.device,
 				seed = parameters.seed,
-				decoder_self_feedback=not parameters.greedy_decoder
+				decoder_self_feedback=not parameters.greedy_decoder,
+				bidirectional_decoder=parameters.bidirectional_decoder,
+				right2left_decoder_weight=parameters.right2left_decoder_weight
 				)
 
 	to_tensor = data_utils.ToTensor()

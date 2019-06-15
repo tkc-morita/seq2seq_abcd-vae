@@ -25,7 +25,7 @@ class Decoder(encode.Encoder):
 					features = self.feature_sampler(**features)
 			features = features.to(self.device).view(1,-1) # Add batch dimension
 			max_length = torch.tensor([max_length]).to(self.device)
-			_,offset_prediction,out = self.decoder(features, lengths=max_length) # The output is flattened and thus the batch dimension doesn't exist.
+			_,offset_prediction,out = self.decoder(features, lengths=max_length)[0] # The output is flattened and thus the batch dimension doesn't exist.
 			offset_probs = torch.nn.Sigmoid()(offset_prediction)
 			for ix,p in enumerate(offset_probs):
 				if offset_threshold < p:
