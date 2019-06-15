@@ -77,7 +77,8 @@ class RNN_Variational_Decoder(torch.nn.Module):
 	Kingma and Willing 2014. Auto-Encoding Variational Bayes.
 	Bowman et al. 2016. Generating Sentences from a Continuous Space.
 	"""
-	def __init__(self, output_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type='LSTM', rnn_layers=1, input_dropout = 0.0, self_feedback=True, esn_leak=1.0):
+	def __init__(self, output_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type='LSTM', rnn_layers=1, input_dropout = 0.0, self_feedback=True, bidirectional=False, esn_leak=1.0):
+		assert rnn_layers==1, 'Only rnn_layers=1 is currently supported.'
 		super(RNN_Variational_Decoder, self).__init__()
 		if not self_feedback:
 			input_dropout = 1.0
@@ -91,14 +92,22 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			self.get_output = lambda hidden: hidden
 			self.reshape_hidden = lambda hidden: self._reshape_hidden(hidden, (-1, rnn_hidden_size))
 			self.shrink_hidden = lambda hidden, batch_size: hidden[:batch_size]
+		self.bidirectional = bidirectional
+		if bidirectional:
+			hidden_size_total *= 2
+			self.rnn_cell_reverse = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, input_dropout=input_dropout, esn_leak=esn_leak)
+			self.offset_predictor_reverse = MLP(rnn_hidden_size, mlp_hidden_size, 1)
+			self.to_parameters_reverse = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 2)
+			self.forward = self._forward_bidirectional
+		else:
+			self.forward = self._forward_unidirectional
 		self.feature2hidden = torch.nn.Linear(feature_size, hidden_size_total)
 		self.to_parameters = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 2)
 		self.offset_predictor = MLP(rnn_hidden_size, mlp_hidden_size, 1)
-		assert rnn_layers==1, 'Only rnn_layers=1 is currently supported.'
 		self.emission_sampler = emission_sampler
 		self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, input_dropout=input_dropout, esn_leak=esn_leak)
 
-	def forward(self, features, lengths=None, batch_sizes=None):
+	def _forward_unidirectional(self, features, lengths=None, batch_sizes=None):
 		"""
 		The output is "flatten", meaning that it's PackedSequence.data.
 		This should be sufficient for the training purpose etc. while we can avoid padding, which would affect the autograd and thus requires masking in the loss calculation.
@@ -127,6 +136,39 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		flatten_offset_weights = self.offset_predictor(flatten_rnn_out).squeeze(-1) # num_batches x 1 -> num_batches
 		return (flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out
 
+	def _forward_bidirectional(self, features, lengths=None, batch_sizes=None):
+		"""
+		The output is "flatten", meaning that it's PackedSequence.data.
+		This should be sufficient for the training purpose etc. while we can avoid padding, which would affect the autograd and thus requires masking in the loss calculation.
+		"""
+		hidden = self.feature2hidden(features) # batch_size x hidden_size_total
+		hidden = hidden.view(-1,2)
+		hidden_reverse = hidden[:,1]
+		hidden_reverse = self.reshape_hidden(hidden_reverse)
+		hidden = hidden[:,0]
+		hidden = self.reshape_hidden(hidden)
+
+		# Manual implementation of RNNs based on RNNCell.
+		assert (not lengths is None) or (not batch_sizes is None), 'Either lengths or batch_sizes must be given.'
+		if not lengths is None: # Mainly for the post training process.
+			batch_sizes = self._length_to_batch_sizes(lengths)
+		flatten_rnn_out = torch.tensor([]).to(features.device) # Correspond to PackedSequence.data.
+		flatten_emission_param1 = torch.tensor([]).to(features.device)
+		flatten_emission_param2 = torch.tensor([]).to(features.device)
+		flatten_out = torch.tensor([]).to(features.device)
+		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(features.device)
+
+		for bs in batch_sizes:
+			hidden = self.rnn_cell(batched_input[:bs], self.shrink_hidden(hidden,bs))
+			rnn_out = self.get_output(hidden)
+			emission_param1,emission_param2 = self.to_parameters(rnn_out)
+			batched_input = self.emission_sampler(emission_param1, emission_param2)
+			flatten_rnn_out = torch.cat([flatten_rnn_out,rnn_out], dim=0)
+			flatten_emission_param1 = torch.cat([flatten_emission_param1, emission_param1], dim=0)
+			flatten_emission_param2 = torch.cat([flatten_emission_param2, emission_param2], dim=0)
+			flatten_out = torch.cat([flatten_out, batched_input], dim=0)
+		flatten_offset_weights = self.offset_predictor(flatten_rnn_out).squeeze(-1) # num_batches x 1 -> num_batches
+		return (flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out
 
 	def _split_into_hidden_and_cell(self, reshaped_hidden):
 		return (reshaped_hidden[...,0],reshaped_hidden[...,1])
@@ -270,7 +312,7 @@ class ESN(torch.nn.Module):
 			flatten_hidden, last_hidden_l = self._forward_per_layer(flatten_input, packed_input.batch_sizes, 'weight_ih_l{l}'.format(l=l), 'weight_hh_l{l}'.format(l=l))
 			last_hidden = torch.cat([last_hidden, last_hidden_l], dim=0)
 			if self.bidirectional:
-				flatten_hidden_back, last_hidden_l_back = self._forward_per_layer(flatten_input, packed_input.batch_sizes, 'weight_ih_l{l}_reverse'.format(l=l), 'weight_hh_l{l}_reverse'.format(l=l))
+				flatten_hidden_back, last_hidden_l_back = self._forward_per_layer_backward(flatten_input, packed_input.batch_sizes, 'weight_ih_l{l}_reverse'.format(l=l), 'weight_hh_l{l}_reverse'.format(l=l))
 				flatten_hidden = torch.cat([flatten_hidden, flatten_hidden_back], dim=-1)
 				last_hidden = torch.cat([last_hidden, last_hidden_l_back], dim=0)
 			flatten_input = self.drop(flatten_hidden)
@@ -284,16 +326,32 @@ class ESN(torch.nn.Module):
 		hidden_transposed = self.init_hidden(batch_sizes[0]).to(input2hidden_transposed.device).t()
 		flatten_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
 		last_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
-		batch_decreases = torch.cat([batch_sizes[:-1]-batch_sizes[1:], torch.tensor([batch_sizes[-1]])]).to(input2hidden_transposed.device)
-		for bs,bd in zip(batch_sizes, batch_decreases):
+		next_batch_sizes = torch.cat([batch_sizes[1:], torch.tensor([0]).to(input2hidden_transposed.device)])
+		for bs,next_bs in zip(batch_sizes, next_batch_sizes):
 			hidden_transposed = hidden_transposed[...,:bs]
 			input2hidden_at_t_transposed = input2hidden_transposed[...,:bs]
 			hidden2hidden_at_t_transposed = getattr(self, weight_hh_name).to_sparse().mm(hidden_transposed)
 			hidden_transposed = (1.0 - self.leak) * hidden_transposed + self.leak * self.activation(input2hidden_at_t_transposed + hidden2hidden_at_t_transposed)
 			flatten_hidden_transposed = torch.cat([flatten_hidden_transposed,hidden_transposed], dim=-1)
 			input2hidden_transposed = input2hidden_transposed[...,bs:]
-			last_hidden_transposed = torch.cat([hidden_transposed[...,bs-bd:], last_hidden_transposed], dim=-1)
+			last_hidden_transposed = torch.cat([hidden_transposed[...,next_bs:], last_hidden_transposed], dim=-1)
 		return flatten_hidden_transposed.t(), last_hidden_transposed.t().view(1,last_hidden_transposed.size(1),last_hidden_transposed.size(0))
+
+	def _forward_per_layer_backward(self, flatten_input, batch_sizes, weight_ih_name, weight_hh_name):
+		# input2hidden
+		input2hidden_transposed = getattr(self, weight_ih_name).mm(flatten_input.t())
+		# hidden2hidden
+		hidden_transposed = self.init_hidden(batch_sizes[-1]).to(input2hidden_transposed.device).t()
+		flatten_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
+		batch_increases = torch.cat([(batch_sizes[:-1]-batch_sizes[1:]).flip(0), torch.tensor([0])]).to(input2hidden_transposed.device)
+		for bs,bi in zip(batch_sizes.flip(0), batch_increases):
+			input2hidden_at_t_transposed = input2hidden_transposed[...,-bs:]
+			hidden2hidden_at_t_transposed = getattr(self, weight_hh_name).to_sparse().mm(hidden_transposed)
+			hidden_transposed = (1.0 - self.leak) * hidden_transposed + self.leak * self.activation(input2hidden_at_t_transposed + hidden2hidden_at_t_transposed)
+			flatten_hidden_transposed = torch.cat([hidden_transposed,flatten_hidden_transposed], dim=-1)
+			input2hidden_transposed = input2hidden_transposed[...,:-bs]
+			hidden_transposed = torch.cat([hidden_transposed,self.init_hidden(bi).t()], dim=-1)
+		return flatten_hidden_transposed.t(), hidden_transposed.t().view(1,hidden_transposed.size(1),hidden_transposed.size(0))
 
 	def init_hidden(self, batch_size):
 		return torch.zeros((batch_size, self.hidden_size), requires_grad=False)
