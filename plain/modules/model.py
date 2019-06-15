@@ -326,7 +326,7 @@ class ESN(torch.nn.Module):
 		hidden_transposed = self.init_hidden(batch_sizes[0]).to(input2hidden_transposed.device).t()
 		flatten_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
 		last_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
-		next_batch_sizes = torch.cat([batch_sizes[1:], torch.tensor([0]).to(input2hidden_transposed.device)])
+		next_batch_sizes = torch.cat([batch_sizes[1:], torch.tensor([0])]).to(input2hidden_transposed.device)
 		for bs,next_bs in zip(batch_sizes, next_batch_sizes):
 			hidden_transposed = hidden_transposed[...,:bs]
 			input2hidden_at_t_transposed = input2hidden_transposed[...,:bs]
@@ -341,16 +341,17 @@ class ESN(torch.nn.Module):
 		# input2hidden
 		input2hidden_transposed = getattr(self, weight_ih_name).mm(flatten_input.t())
 		# hidden2hidden
-		hidden_transposed = self.init_hidden(batch_sizes[-1]).to(input2hidden_transposed.device).t()
+		init_hidden_fullsize_transposed = self.init_hidden(batch_sizes[0]).to(input2hidden_transposed.device).t()
+		hidden_transposed = init_hidden_fullsize_transposed[:,:batch_sizes[-1]]
 		flatten_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
-		batch_increases = torch.cat([(batch_sizes[:-1]-batch_sizes[1:]).flip(0), torch.tensor([0])]).to(input2hidden_transposed.device)
-		for bs,bi in zip(batch_sizes.flip(0), batch_increases):
+		next_batch_sizes = torch.cat([batch_sizes[:-1].flip(0), torch.tensor([0])]).to(input2hidden_transposed.device)
+		for bs,next_bs in zip(batch_sizes.flip(0), next_batch_sizes):
 			input2hidden_at_t_transposed = input2hidden_transposed[...,-bs:]
 			hidden2hidden_at_t_transposed = getattr(self, weight_hh_name).to_sparse().mm(hidden_transposed)
 			hidden_transposed = (1.0 - self.leak) * hidden_transposed + self.leak * self.activation(input2hidden_at_t_transposed + hidden2hidden_at_t_transposed)
 			flatten_hidden_transposed = torch.cat([hidden_transposed,flatten_hidden_transposed], dim=-1)
 			input2hidden_transposed = input2hidden_transposed[...,:-bs]
-			hidden_transposed = torch.cat([hidden_transposed,self.init_hidden(bi).t()], dim=-1)
+			hidden_transposed = torch.cat([hidden_transposed,init_hidden_fullsize_transposed[:,bs:next_bs]], dim=-1)
 		return flatten_hidden_transposed.t(), hidden_transposed.t().view(1,hidden_transposed.size(1),hidden_transposed.size(0))
 
 	def init_hidden(self, batch_size):
