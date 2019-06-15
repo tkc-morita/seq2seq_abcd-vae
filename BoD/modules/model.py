@@ -270,7 +270,7 @@ class ESN(torch.nn.Module):
 			flatten_hidden, last_hidden_l = self._forward_per_layer(flatten_input, packed_input.batch_sizes, 'weight_ih_l{l}'.format(l=l), 'weight_hh_l{l}'.format(l=l))
 			last_hidden = torch.cat([last_hidden, last_hidden_l], dim=0)
 			if self.bidirectional:
-				flatten_hidden_back, last_hidden_l_back = self._forward_per_layer(flatten_input, packed_input.batch_sizes, 'weight_ih_l{l}_reverse'.format(l=l), 'weight_hh_l{l}_reverse'.format(l=l))
+				flatten_hidden_back, last_hidden_l_back = self._forward_per_layer_backward(flatten_input, packed_input.batch_sizes, 'weight_ih_l{l}_reverse'.format(l=l), 'weight_hh_l{l}_reverse'.format(l=l))
 				flatten_hidden = torch.cat([flatten_hidden, flatten_hidden_back], dim=-1)
 				last_hidden = torch.cat([last_hidden, last_hidden_l_back], dim=0)
 			flatten_input = self.drop(flatten_hidden)
@@ -284,16 +284,33 @@ class ESN(torch.nn.Module):
 		hidden_transposed = self.init_hidden(batch_sizes[0]).to(input2hidden_transposed.device).t()
 		flatten_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
 		last_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
-		batch_decreases = torch.cat([batch_sizes[:-1]-batch_sizes[1:], torch.tensor([batch_sizes[-1]])]).to(input2hidden_transposed.device)
-		for bs,bd in zip(batch_sizes, batch_decreases):
+		next_batch_sizes = torch.cat([batch_sizes[1:], torch.tensor([0])]).to(input2hidden_transposed.device)
+		for bs,next_bs in zip(batch_sizes, next_batch_sizes):
 			hidden_transposed = hidden_transposed[...,:bs]
 			input2hidden_at_t_transposed = input2hidden_transposed[...,:bs]
 			hidden2hidden_at_t_transposed = getattr(self, weight_hh_name).to_sparse().mm(hidden_transposed)
 			hidden_transposed = (1.0 - self.leak) * hidden_transposed + self.leak * self.activation(input2hidden_at_t_transposed + hidden2hidden_at_t_transposed)
 			flatten_hidden_transposed = torch.cat([flatten_hidden_transposed,hidden_transposed], dim=-1)
 			input2hidden_transposed = input2hidden_transposed[...,bs:]
-			last_hidden_transposed = torch.cat([hidden_transposed[...,bs-bd:], last_hidden_transposed], dim=-1)
+			last_hidden_transposed = torch.cat([hidden_transposed[...,next_bs:], last_hidden_transposed], dim=-1)
 		return flatten_hidden_transposed.t(), last_hidden_transposed.t().view(1,last_hidden_transposed.size(1),last_hidden_transposed.size(0))
+
+	def _forward_per_layer_backward(self, flatten_input, batch_sizes, weight_ih_name, weight_hh_name):
+		# input2hidden
+		input2hidden_transposed = getattr(self, weight_ih_name).mm(flatten_input.t())
+		# hidden2hidden
+		init_hidden_fullsize_transposed = self.init_hidden(batch_sizes[0]).to(input2hidden_transposed.device).t()
+		hidden_transposed = init_hidden_fullsize_transposed[:,:batch_sizes[-1]]
+		flatten_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
+		next_batch_sizes = torch.cat([batch_sizes[:-1].flip(0), torch.tensor([0])]).to(input2hidden_transposed.device)
+		for bs,next_bs in zip(batch_sizes.flip(0), next_batch_sizes):
+			input2hidden_at_t_transposed = input2hidden_transposed[...,-bs:]
+			hidden2hidden_at_t_transposed = getattr(self, weight_hh_name).to_sparse().mm(hidden_transposed)
+			hidden_transposed = (1.0 - self.leak) * hidden_transposed + self.leak * self.activation(input2hidden_at_t_transposed + hidden2hidden_at_t_transposed)
+			flatten_hidden_transposed = torch.cat([hidden_transposed,flatten_hidden_transposed], dim=-1)
+			input2hidden_transposed = input2hidden_transposed[...,:-bs]
+			hidden_transposed = torch.cat([hidden_transposed,init_hidden_fullsize_transposed[:,bs:next_bs]], dim=-1)
+		return flatten_hidden_transposed.t(), hidden_transposed.t().view(1,hidden_transposed.size(1),hidden_transposed.size(0))
 
 	def init_hidden(self, batch_size):
 		return torch.zeros((batch_size, self.hidden_size), requires_grad=False)
@@ -342,7 +359,7 @@ class ESNCell(torch.nn.Module):
 	def forward(self, batched_input, hidden=None):
 		if hidden is None:
 			hidden = self.init_hidden(batched_input.size(0)).to(batched_input.device)
-		update = self.activation(self.weight_ih.mm(batched_input.t()) + self.weight_hh.mm(hidden.t())).t()
+		update = self.activation(self.weight_ih.mm(batched_input.t()) + self.weight_hh.to_sparse().mm(hidden.t())).t()
 		hidden = (1.0 - self.leak) * hidden + self.leak * update
 		return hidden
 

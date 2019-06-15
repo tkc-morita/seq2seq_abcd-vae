@@ -28,6 +28,7 @@ def update_log_handler(file_dir):
 		logger.info("LEARNING RETRIEVED.")
 	else:
 		logger.info("Logger set up.")
+		logger.info("PyTorch ver.: {ver}".format(ver=torch.__version__))
 	return retrieval,log_file_path
 
 
