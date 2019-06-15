@@ -224,7 +224,6 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		self.emission_sampler = self._emission_sampler
 
 
-
 class RNN_Cell(torch.nn.Module):
 	def __init__(self, input_size, hidden_size, model_type='LSTM', input_dropout = 0.0, esn_leak=1.0):
 		super(RNN_Cell, self).__init__()
@@ -250,8 +249,8 @@ class MLP_To_k_Vecs(torch.nn.Module):
 		out = [mlp(batched_input) for mlp in self.mlps]
 		return out
 
-
-class MLP(torch.nn.Module):
+class MLP(torch.jit.ScriptModule):
+# class MLP(torch.nn.Module):
 	"""
 	Multi-Layer Perceptron.
 	"""
@@ -264,6 +263,7 @@ class MLP(torch.nn.Module):
 			torch.nn.Linear(hidden_size, output_size)
 			)
 
+	@torch.jit.script_method
 	def forward(self, batched_input):
 		return self.whole_network(batched_input)
 
