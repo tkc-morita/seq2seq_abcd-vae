@@ -400,7 +400,7 @@ class ESNCell(torch.nn.Module):
 	def forward(self, batched_input, hidden=None):
 		if hidden is None:
 			hidden = self.init_hidden(batched_input.size(0)).to(batched_input.device)
-		update = self.activation(self.weight_ih.mm(batched_input.t()) + self.weight_hh.mm(hidden.t())).t()
+		update = self.activation(self.weight_ih.mm(batched_input.t()) + self.weight_hh.to_sparse().mm(hidden.t())).t()
 		hidden = (1.0 - self.leak) * hidden + self.leak * update
 		return hidden
 
