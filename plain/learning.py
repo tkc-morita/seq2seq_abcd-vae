@@ -292,9 +292,16 @@ class Learner(object):
 		decoder_rnn_hidden_size = checkpoint['decoder_rnn_hidden_size']
 		encoder_rnn_layers = checkpoint['encoder_rnn_layers']
 		bidirectional_encoder = checkpoint['bidirectional_encoder']
-		bidirectional_decoder = checkpoint['bidirectional_decoder']
-		self.log_left2right_decoder_weight = checkpoint['log_left2right_decoder_weight']
-		self.log_right2left_decoder_weight = checkpoint['log_right2left_decoder_weight']
+		if 'bidirectional_decoder' in checkpoint:
+			bidirectional_decoder = checkpoint['bidirectional_decoder']
+		else:
+			bidirectional_decoder = False
+		if 'log_left2right_decoder_weight':
+			self.log_left2right_decoder_weight = checkpoint['log_left2right_decoder_weight']
+			self.log_right2left_decoder_weight = checkpoint['log_right2left_decoder_weight']
+		else:
+			self.log_left2right_decoder_weight = 0.0
+			self.log_right2left_decoder_weight = None
 		encoder_hidden_dropout = checkpoint['encoder_hidden_dropout']
 		decoder_input_dropout = checkpoint['decoder_input_dropout']
 		feature_size = checkpoint['feature_size']
