@@ -79,11 +79,13 @@ class Learner(object):
 			logger.info("# of hidden units in the MLPs: {hs}".format(hs=mlp_hidden_size))
 			logger.info("Encoder is bidirectional: {bidirectional_encoder}".format(bidirectional_encoder=bidirectional_encoder))
 			logger.info("Decoder is bidirectional: {bidirectional_decoder}".format(bidirectional_decoder=bidirectional_decoder))
-			self.right2left_decoder_weight = right2left_decoder_weight
 			if bidirectional_decoder:
 				logger.info("Probability of emission by the right-to-left decoder: {p}".format(p=right2left_decoder_weight))
+				self.log_left2right_decoder_weight = torch.tensor(1 - right2left_decoder_weight).log().item()
+				self.log_right2left_decoder_weight = torch.tensor(right2left_decoder_weight).log().item()
 			else:
-				self.right2left_decoder_weight = 0.0
+				self.log_left2right_decoder_weight = 0.0
+				self.log_right2left_decoder_weight = None
 			logger.info("Dropout rate in the non-top layers of the encoder RNN: {do}".format(do=encoder_hidden_dropout))
 			logger.info("Self-feedback to the decoder: {decoder_self_feedback}".format(decoder_self_feedback=decoder_self_feedback))
 			if decoder_self_feedback:
@@ -122,11 +124,13 @@ class Learner(object):
 
 			feature_params = self.encoder(packed_input)
 			features = self.feature_sampler(*feature_params)
-			emission_loss_per_batch = 0.0
-			end_prediction_loss_per_batch = 0.0
-			for (emission_params,flatten_offset_prediction,_), loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes), (1.0-self.right2left_decoder_weight, self.right2left_decoder_weight)):
-				emission_loss_per_batch += -self.log_pdf_emission(packed_input.data, *emission_params) * loss_weight
-				end_prediction_loss_per_batch += self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data) * loss_weight
+			emission_loss_per_batch = []
+			end_prediction_loss_per_batch = []
+			for (emission_params,flatten_offset_prediction,_), log_loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes), (self.log_left2right_decoder_weight, self.log_right2left_decoder_weight)):
+				emission_loss_per_batch += [-self.log_pdf_emission(packed_input.data, *emission_params) + log_loss_weight]
+				end_prediction_loss_per_batch += [self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data) + log_loss_weight]
+			emission_loss_per_batch = torch.stack(emission_loss_per_batch).logsumexp(dim=0)
+			end_prediction_loss_per_batch = torch.stack(end_prediction_loss_per_batch).logsumexp(dim=0)
 			kl_loss_per_batch = self.kl_func(*feature_params)
 			loss = emission_loss_per_batch + end_prediction_loss_per_batch + kl_loss_per_batch
 			loss.backward()
@@ -175,9 +179,13 @@ class Learner(object):
 
 				feature_params = self.encoder(packed_input)
 				features = self.feature_sampler(*feature_params)
-				for (emission_params,flatten_offset_prediction,_), loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes), (1.0-self.right2left_decoder_weight, self.right2left_decoder_weight)):
-					emission_loss += -self.log_pdf_emission(packed_input.data, *emission_params).item() * loss_weight
-					end_prediction_loss += self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data).item() * loss_weight
+				emission_loss_per_batch = []
+				end_prediction_loss_per_batch = []
+				for (emission_params,flatten_offset_prediction,_), log_loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes), (self.log_left2right_decoder_weight, self.log_right2left_decoder_weight)):
+					emission_loss_per_batch += [-self.log_pdf_emission(packed_input.data, *emission_params) + log_loss_weight]
+					end_prediction_loss_per_batch += [self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data) + log_loss_weight]
+				emission_loss += torch.stack(emission_loss_per_batch).logsumexp(dim=0).item()
+				end_prediction_loss += torch.stack(end_prediction_loss_per_batch).logsumexp(dim=0).item()
 				kl_loss += self.kl_func(*feature_params).item()
 
 				logger.info('{batch_ix}/{num_batches} validation batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
@@ -254,7 +262,8 @@ class Learner(object):
 			'encoder_rnn_layers':self.encoder.rnn.num_layers,
 			'bidirectional_encoder':self.encoder.rnn.bidirectional,
 			'bidirectional_decoder':self.decoder.bidirectional,
-			'right2left_decoder_weight':self.right2left_decoder_weight,
+			'log_left2right_decoder_weight':self.log_left2right_decoder_weight,
+			'log_right2left_decoder_weight':self.log_right2left_decoder_weight,
 			'encoder_hidden_dropout':self.encoder.rnn.dropout,
 			'decoder_input_dropout':self.decoder.rnn_cell.drop.p,
 			'mlp_hidden_size':self.encoder.to_parameters.mlps[0].hidden_size,
@@ -286,7 +295,8 @@ class Learner(object):
 		encoder_rnn_layers = checkpoint['encoder_rnn_layers']
 		bidirectional_encoder = checkpoint['bidirectional_encoder']
 		bidirectional_decoder = checkpoint['bidirectional_decoder']
-		self.right2left_decoder_weight = checkpoint['right2left_decoder_weight']
+		self.log_left2right_decoder_weight = checkpoint['log_left2right_decoder_weight']
+		self.log_right2left_decoder_weight = checkpoint['log_right2left_decoder_weight']
 		encoder_hidden_dropout = checkpoint['encoder_hidden_dropout']
 		decoder_input_dropout = checkpoint['decoder_input_dropout']
 		feature_size = checkpoint['feature_size']
