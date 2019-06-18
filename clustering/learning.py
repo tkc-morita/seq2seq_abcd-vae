@@ -397,7 +397,7 @@ def get_parameters():
 	par_parser.add_argument('--bidirectional_decoder', action='store_true', help='If selected, use the weighted sum of losses from left-to-right and right-to-left decoders (to avoid the uninformative latent variable problem).')
 	par_parser.add_argument('--right2left_decoder_weight', type=float, default=0.5, help='The weight of the right-to-left decoder when bidirectional_decoder==True.')
 	par_parser.add_argument('-C', '--num_clusters', type=int, default=64, help='Max # of clusters. Currently floored to a power of 2.')
-	par_parser.add_argument('--relax_scalar', type=float, default=1.0, help='Concentration of the Dirichlet distribution that relaxes the categorical assignments to the clusters.')
+	par_parser.add_argument('--relax_scalar', type=float, default=0.01, help='Concentration of the Dirichlet distribution that relaxes the categorical assignments to the clusters.')
 	par_parser.add_argument('--base_counts', type=float, default=[1.0], nargs='+', help='Base counts of the clusters (i.e., the parameters of the Dirichlet prior of the clusters).')
 	par_parser.add_argument('-j', '--job_id', type=str, default='NO_JOB_ID', help='Job ID. For users of computing clusters.')
 	par_parser.add_argument('-s', '--seed', type=int, default=1111, help='random seed')
