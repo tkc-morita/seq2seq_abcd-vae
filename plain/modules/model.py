@@ -56,8 +56,8 @@ class RNN_Variational_Encoder(torch.nn.Module):
 		if self.rnn.mode == 'LSTM':
 			last_hidden = torch.cat(last_hidden, dim=-1)
 		# Flatten the last_hidden into batch_size x rnn_layers * hidden_size
-		features = last_hidden.transpose(0,1).contiguous().view(last_hidden.size(1), -1)
-		parameters = self.to_parameters(features)
+		last_hidden = last_hidden.transpose(0,1).contiguous().view(last_hidden.size(1), -1)
+		parameters = self.to_parameters(last_hidden)
 		return parameters
 
 
