@@ -92,12 +92,10 @@ class Learner(object):
 				logger.info("Dropout rate in the input to the decoder RNN: {do}".format(do=decoder_input_dropout))
 			if encoder_rnn_type == 'ESN' or decoder_rnn_type == 'ESN':
 				logger.info('ESN leak: {leak}'.format(leak=esn_leak))
-
-
+			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters())
 
 		self.encoder.to(self.device)
 		self.decoder.to(self.device)
-		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters())
 
 
 
