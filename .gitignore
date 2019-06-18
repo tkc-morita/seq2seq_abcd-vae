@@ -8,8 +8,6 @@
 data
 results
 wavenet_like
-no_BoD
-clustering
 
 # Other irrelevant things
 *__pycache__*
