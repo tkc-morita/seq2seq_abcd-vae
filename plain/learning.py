@@ -296,7 +296,7 @@ class Learner(object):
 			bidirectional_decoder = checkpoint['bidirectional_decoder']
 		else:
 			bidirectional_decoder = False
-		if 'log_left2right_decoder_weight':
+		if 'log_left2right_decoder_weight' in checkpoint:
 			self.log_left2right_decoder_weight = checkpoint['log_left2right_decoder_weight']
 			self.log_right2left_decoder_weight = checkpoint['log_right2left_decoder_weight']
 		else:
