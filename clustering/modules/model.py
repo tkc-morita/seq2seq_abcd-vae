@@ -38,19 +38,17 @@ class RNN_Variational_Encoder(torch.nn.Module):
 	Kingma and Willing 2014. Auto-Encoding Variational Bayes.
 	Bowman et al. 2016. Generating Sentences from a Continuous Space.
 	"""
-	def __init__(self, input_size, rnn_hidden_size, mlp_hidden_size, parameter_size, rnn_type='LSTM', rnn_layers=1, hidden_dropout = 0.0, bidirectional=True, esn_leak=1.0):
+	def __init__(self, input_size, rnn_hidden_size, rnn_type='LSTM', rnn_layers=1, hidden_dropout = 0.0, bidirectional=True, esn_leak=1.0):
 		super(RNN_Variational_Encoder, self).__init__()
 		if rnn_type == 'ESN':
 			self.rnn = ESN(input_size, rnn_hidden_size, rnn_layers, dropout=hidden_dropout, bidirectional=bidirectional, batch_first=True, leak=esn_leak)
 		else:
 			self.rnn = getattr(torch.nn, rnn_type)(input_size, rnn_hidden_size, rnn_layers, dropout=hidden_dropout, bidirectional=bidirectional, batch_first=True)
-		hidden_size_total = rnn_layers * rnn_hidden_size
+		self.hidden_size_total = rnn_layers * rnn_hidden_size
 		if bidirectional:
-			hidden_size_total *= 2
+			self.hidden_size_total *= 2
 		if rnn_type == 'LSTM':
-			hidden_size_total *= 2
-		self.to_parameters = MLP(hidden_size_total, mlp_hidden_size, parameter_size)
-		self.to_non_negative = torch.nn.Sigmoid()
+			self.hidden_size_total *= 2
 
 	def forward(self, packed_input):
 		_, last_hidden = self.rnn(packed_input)
@@ -58,9 +56,7 @@ class RNN_Variational_Encoder(torch.nn.Module):
 			last_hidden = torch.cat(last_hidden, dim=-1)
 		# Flatten the last_hidden into batch_size x rnn_layers * hidden_size
 		last_hidden = last_hidden.transpose(0,1).contiguous().view(last_hidden.size(1), -1)
-		parameters = self.to_parameters(last_hidden)
-		parameters = self.to_non_negative(parameters)
-		return parameters
+		return last_hidden
 
 
 
@@ -259,6 +255,7 @@ class MLP(torch.jit.ScriptModule):
 	"""
 	def __init__(self, input_size, hidden_size, output_size):
 		super(MLP, self).__init__()
+		self.input_size = input_size
 		self.hidden_size = hidden_size
 		self.whole_network = torch.nn.Sequential(
 			torch.nn.Linear(input_size, hidden_size),
@@ -458,7 +455,7 @@ class ESNCell(torch.jit.ScriptModule):
 		return hidden
 
 class SampleFromDirichlet(torch.nn.Module):
-	def __init__(self, num_clusters, relax_scalar=0.05, base_counts = 1.0):
+	def __init__(self, num_clusters, mlp_input_size, mlp_hidden_size, relax_scalar=0.05, base_counts = 1.0):
 		super(SampleFromDirichlet, self).__init__()
 		self.num_clusters = num_clusters
 		self.relax_scalar = relax_scalar
@@ -474,15 +471,17 @@ class SampleFromDirichlet(torch.nn.Module):
 			base_counts = torch.ones_like(self.q_pi_weights, requires_grad=False)
 		self.base_counts = base_counts
 		self.p_pi = torch.distributions.dirichlet.Dirichlet(base_counts)
+		self.to_q_kappa_weights = MLP(mlp_input_size, mlp_hidden_size, num_clusters)
 		self.to_non_negative = torch.nn.Sigmoid()
 
 
-	def forward(self, q_kappa_weights):
+	def forward(self, weights_seed):
 		# Sample a relaxed category assignment kappa from q(kappa | x) = Dirichlet(q_kappa_weights).
+		q_kappa_weights = self.to_non_negative(self.to_q_kappa_weights(weights_seed))
 		q_kappa_given_x = torch.distributions.dirichlet.Dirichlet(q_kappa_weights)
 		kappa = q_kappa_given_x.rsample()
-		print(q_kappa_weights)
-		print(kappa)
+		# print(q_kappa_weights)
+		# print(kappa)
 
 		# Sample a shape pi of the Dirichlet prior p(kappa | pi) from q(pi) = Dirichlet(self.q_pi_weights)
 		q_pi = torch.distributions.dirichlet.Dirichlet(self.to_non_negative(self.q_pi_weights))
@@ -498,9 +497,9 @@ class SampleFromDirichlet(torch.nn.Module):
 		return kappa, kl_divergence
 
 
-class SampleFromSharedIsotropicGaussian(torch.nn.Module):
+class SampleFromSharedIsotropicGaussians(torch.nn.Module):
 	def __init__(self, prior_mean, prior_sd, num_clusters=None, ndim=None):
-		super(SampleFromSharedIsotropicGaussian, self).__init__()
+		super(SampleFromSharedIsotropicGaussians, self).__init__()
 		if isinstance(prior_mean,float):
 			assert not (ndim is None or num_clusters is None), 'num_clusters and ndim must be specified when prior_mean is a scalar.'
 			prior_mean = torch.ones((num_clusters, ndim)) * prior_mean
@@ -533,3 +532,21 @@ class SampleFromSharedIsotropicGaussian(torch.nn.Module):
 		# Measure the KL divergence between q(z) and p(z).
 		kl_divergence = torch.distributions.kl_divergence(q_z, self.p_z).sum() / batch_size
 		return z, kl_divergence
+
+
+class SampleFromDataConditionedIsotropicGaussian(torch.nn.Module):
+	def __init__(self, mlp_input_size, mlp_hidden_size, ndim):
+		super(SampleFromDataConditionedIsotropicGaussian, self).__init__()
+		self.to_parameters = MLP_To_k_Vecs(mlp_input_size, mlp_hidden_size, ndim, 2)
+
+	def forward(self, parameter_seed, prior_mean, prior_sd = None):
+		mean,log_var = self.to_parameters(parameter_seed)
+		posterior_distr = torch.distributions.normal.Normal(mean, (0.5 * log_var).exp())
+		samples = posterior_distr.rsample()
+		
+		if prior_sd is None:
+			prior_sd = torch.ones_like(prior_mean)
+		prior_distr = torch.distributions.normal.Normal(prior_mean, prior_sd)
+		
+		kl_divergence = torch.distributions.kl_divergence(posterior_distr, prior_distr).sum()
+		return samples, kl_divergence
