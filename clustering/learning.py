@@ -144,8 +144,8 @@ class Learner(object):
 			self.optimizer.zero_grad()
 
 			last_hidden = self.encoder(packed_input)
-			cluster_weights,kl_weight = self.mixture_ratio_sampler(last_hidden)
-			features,kl_value = self.mixture_components(cluster_weights, parameter_seed=last_hidden)
+			cluster_weights,kl_weight,_ = self.mixture_ratio_sampler(last_hidden)
+			features,kl_value,_ = self.mixture_components(cluster_weights, parameter_seed=last_hidden)
 			kl_loss_per_batch = kl_weight + kl_value
 			emission_loss_per_batch = []
 			end_prediction_loss_per_batch = []
@@ -203,8 +203,8 @@ class Learner(object):
 				is_offset = is_offset.to(self.device)
 
 				last_hidden = self.encoder(packed_input)
-				cluster_weights,kl_weight = self.mixture_ratio_sampler(last_hidden)
-				features,kl_value = self.mixture_components(cluster_weights, parameter_seed=last_hidden)
+				cluster_weights,kl_weight,_ = self.mixture_ratio_sampler(last_hidden)
+				features,kl_value,_ = self.mixture_components(cluster_weights, parameter_seed=last_hidden)
 				kl_loss += kl_weight + kl_value
 				emission_loss_per_batch = []
 				end_prediction_loss_per_batch = []

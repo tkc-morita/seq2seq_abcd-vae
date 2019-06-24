@@ -455,7 +455,7 @@ class ESNCell(torch.jit.ScriptModule):
 		return hidden
 
 class SampleFromDirichlet(torch.nn.Module):
-	def __init__(self, num_clusters, mlp_input_size, mlp_hidden_size, relax_scalar=0.05, base_counts = 1.0):
+	def __init__(self, num_clusters, mlp_input_size, mlp_hidden_size, relax_scalar=0.05, base_counts = 1.0, max_weight=10.0, min_weight=0.1):
 		super(SampleFromDirichlet, self).__init__()
 		self.num_clusters = num_clusters
 		self.relax_scalar = relax_scalar
@@ -472,7 +472,9 @@ class SampleFromDirichlet(torch.nn.Module):
 		self.base_counts = base_counts
 		self.p_pi = torch.distributions.dirichlet.Dirichlet(base_counts)
 		self.to_q_kappa_weights = MLP(mlp_input_size, mlp_hidden_size, num_clusters)
-		self.to_non_negative = torch.nn.Sigmoid()
+		self.max_weight = max_weight
+		self.min_weight = min_weight
+		self.to_non_negative = (lambda x: torch.nn.ReLU()(x) + min_weight)
 
 
 	def forward(self, weights_seed):
@@ -480,6 +482,8 @@ class SampleFromDirichlet(torch.nn.Module):
 		q_kappa_weights = self.to_non_negative(self.to_q_kappa_weights(weights_seed))
 		q_kappa_given_x = torch.distributions.dirichlet.Dirichlet(q_kappa_weights)
 		kappa = q_kappa_given_x.rsample()
+		print(q_kappa_weights[0].min(), q_kappa_weights[0].median(), q_kappa_weights[0].max())
+		print(kappa[0].min(), kappa[0].median(), kappa[0].max())
 
 		# Sample a shape pi of the Dirichlet prior p(kappa | pi) from q(pi) = Dirichlet(self.q_pi_weights)
 		q_pi = torch.distributions.dirichlet.Dirichlet(self.to_non_negative(self.q_pi_weights))
@@ -492,7 +496,7 @@ class SampleFromDirichlet(torch.nn.Module):
 		p_kappa_given_pi = torch.distributions.dirichlet.Dirichlet(self.relax_scalar * pi)
 		kl_divergence += torch.distributions.kl_divergence(q_kappa_given_x, p_kappa_given_pi).sum()
 
-		return kappa, kl_divergence
+		return kappa, kl_divergence, q_kappa_given_x
 
 
 class SampleFromIsotropicGaussianMixture(torch.nn.Module):
@@ -555,4 +559,5 @@ class SampleFromIsotropicGaussianMixture(torch.nn.Module):
 
 			# Measure the KL divergence between q(z) and p(z).
 			kl_divergence = torch.distributions.kl_divergence(posterior_distr, self.prior_distr).sum() / cluster_weights.size(0)
-		return samples, kl_divergence
+			posterior_mean, posterior_log_var = self.posterior_mean, self.posterior_log_var
+		return samples, kl_divergence, (posterior_mean, posterior_log_var)
