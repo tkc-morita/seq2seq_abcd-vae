@@ -483,7 +483,7 @@ class SampleFromDirichlet(torch.nn.Module):
 		q_kappa_weights = self.to_non_negative(self.to_q_kappa_weights(weights_seed))
 		q_kappa_given_x = torch.distributions.dirichlet.Dirichlet(q_kappa_weights)
 		kappa = q_kappa_given_x.rsample()
-		print(q_kappa_weights[0].min(), q_kappa_weights[0].median(), q_kappa_weights[0].max())
+		# print(q_kappa_weights[0].min(), q_kappa_weights[0].median(), q_kappa_weights[0].max())
 
 		# Sample a shape pi of the Dirichlet prior p(kappa | pi) from q(pi) = Dirichlet(self.q_pi_weights)
 		q_pi = torch.distributions.dirichlet.Dirichlet(self.to_non_negative(self.q_pi_weights))
