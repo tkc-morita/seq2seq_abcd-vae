@@ -455,7 +455,7 @@ class ESNCell(torch.jit.ScriptModule):
 		return hidden
 
 class SampleFromDirichlet(torch.nn.Module):
-	def __init__(self, num_clusters, mlp_input_size, mlp_hidden_size, relax_scalar=0.05, base_counts = 1.0, max_weight=10.0, min_weight=0.1):
+	def __init__(self, num_clusters, mlp_input_size, mlp_hidden_size, relax_scalar=0.05, prior_base_counts = 1.0, posterior_base_counts=0.1):
 		super(SampleFromDirichlet, self).__init__()
 		self.num_clusters = num_clusters
 		self.relax_scalar = relax_scalar
@@ -467,14 +467,13 @@ class SampleFromDirichlet(torch.nn.Module):
 					requires_grad=True)
 				)
 
-		if isinstance(base_counts, float):
-			base_counts = torch.ones_like(self.q_pi_weights, requires_grad=False)
-		self.base_counts = base_counts
-		self.p_pi = torch.distributions.dirichlet.Dirichlet(base_counts)
+		if isinstance(prior_base_counts, float):
+			prior_base_counts = torch.ones_like(self.q_pi_weights, requires_grad=False)
+		self.prior_base_counts = prior_base_counts
+		self.p_pi = torch.distributions.dirichlet.Dirichlet(prior_base_counts)
 		self.to_q_kappa_weights = MLP(mlp_input_size, mlp_hidden_size, num_clusters)
-		self.max_weight = max_weight
-		self.min_weight = min_weight
-		self.to_non_negative = (lambda x: torch.nn.ReLU()(x) + min_weight)
+		self.posterior_base_counts = posterior_base_counts
+		self.to_non_negative = (lambda x: torch.nn.ELU()(x) + 1.0 + posterior_base_counts)
 
 
 	def forward(self, weights_seed):
