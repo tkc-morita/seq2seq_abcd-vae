@@ -455,7 +455,7 @@ class ESNCell(torch.jit.ScriptModule):
 		return hidden
 
 class SampleFromDirichlet(torch.nn.Module):
-	def __init__(self, num_clusters, mlp_input_size, mlp_hidden_size, relax_scalar=0.05, prior_base_counts = 1.0, posterior_base_counts=0.1):
+	def __init__(self, num_clusters, mlp_input_size, mlp_hidden_size, relax_scalar=0.05, prior_base_counts = 1.0, posterior_base_counts=0.05):
 		super(SampleFromDirichlet, self).__init__()
 		self.num_clusters = num_clusters
 		self.relax_scalar = relax_scalar
@@ -481,8 +481,7 @@ class SampleFromDirichlet(torch.nn.Module):
 		q_kappa_weights = self.to_non_negative(self.to_q_kappa_weights(weights_seed))
 		q_kappa_given_x = torch.distributions.dirichlet.Dirichlet(q_kappa_weights)
 		kappa = q_kappa_given_x.rsample()
-		print(q_kappa_weights[0].min(), q_kappa_weights[0].median(), q_kappa_weights[0].max())
-		print(kappa[0].min(), kappa[0].median(), kappa[0].max())
+		# print(q_kappa_weights[0].min(), q_kappa_weights[0].median(), q_kappa_weights[0].max())
 
 		# Sample a shape pi of the Dirichlet prior p(kappa | pi) from q(pi) = Dirichlet(self.q_pi_weights)
 		q_pi = torch.distributions.dirichlet.Dirichlet(self.to_non_negative(self.q_pi_weights))

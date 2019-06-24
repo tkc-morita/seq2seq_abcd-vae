@@ -34,7 +34,7 @@ def update_log_handler(file_dir):
 
 
 class Learner(object):
-	def __init__(self, input_size, encoder_rnn_hidden_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, num_clusters, save_dir, encoder_rnn_type='LSTM', decoder_rnn_type='LSTM', encoder_rnn_layers=1, bidirectional_encoder=True, bidirectional_decoder=False, right2left_decoder_weight=0.5, encoder_hidden_dropout = 0.0, decoder_input_dropout = 0.0, device=False, seed=1111, emission_distribution='isotropic_gaussian', decoder_self_feedback=True, esn_leak=1.0, relax_scalar=0.05, prior_base_counts = 1.0, p_z_mean = None, p_z_sd = 1.0, hierarchical_noise=False, post_mixture_noise_prior_sd=1.0, posterior_base_counts=None):
+	def __init__(self, input_size, encoder_rnn_hidden_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, num_clusters, save_dir, encoder_rnn_type='LSTM', decoder_rnn_type='LSTM', encoder_rnn_layers=1, bidirectional_encoder=True, bidirectional_decoder=False, right2left_decoder_weight=0.5, encoder_hidden_dropout = 0.0, decoder_input_dropout = 0.0, device=False, seed=1111, emission_distribution='isotropic_gaussian', decoder_self_feedback=True, esn_leak=1.0, relax_scalar=0.05, prior_base_counts = 1.0, p_z_mean = None, p_z_sd = 1.0, hierarchical_noise=False, post_mixture_noise_prior_sd=1.0, posterior_base_counts=0.05):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
 		if not self.retrieval:
 			torch.manual_seed(seed)
@@ -408,7 +408,7 @@ def get_parameters():
 	par_parser.add_argument('-C', '--num_clusters', type=int, default=64, help='Max # of clusters. Currently floored to a power of 2.')
 	par_parser.add_argument('--relax_scalar', type=float, default=0.01, help='Concentration of the Dirichlet distribution that relaxes the categorical assignments to the clusters.')
 	par_parser.add_argument('--prior_base_counts', type=float, default=[1.0], nargs='+', help='Base counts of the clusters for the prior (i.e., the parameters of the Dirichlet prior of the clusters).')
-	par_parser.add_argument('--posterior_base_counts', type=float, default=0.001, help='Base counts of the clusters for the posterior, which avoids underflow in the computation of Dirichlet gradients.')
+	par_parser.add_argument('--posterior_base_counts', type=float, default=0.05, help='Base counts of the clusters for the posterior, which avoids underflow in the computation of Dirichlet gradients.')
 	par_parser.add_argument('-H', '--hierarchical_noise', action='store_true', help='If selected, assume the hierarhical Gaussian model adopted by Feldman et al. (2009), which adds an additional noise to the mixed features of each data point.')
 	par_parser.add_argument('-j', '--job_id', type=str, default='NO_JOB_ID', help='Job ID. For users of computing clusters.')
 	par_parser.add_argument('-s', '--seed', type=int, default=1111, help='random seed')
