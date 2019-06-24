@@ -34,7 +34,7 @@ def update_log_handler(file_dir):
 
 
 class Learner(object):
-	def __init__(self, input_size, encoder_rnn_hidden_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, num_clusters, save_dir, encoder_rnn_type='LSTM', decoder_rnn_type='LSTM', encoder_rnn_layers=1, bidirectional_encoder=True, bidirectional_decoder=False, right2left_decoder_weight=0.5, encoder_hidden_dropout = 0.0, decoder_input_dropout = 0.0, device=False, seed=1111, emission_distribution='isotropic_gaussian', decoder_self_feedback=True, esn_leak=1.0, relax_scalar=0.05, base_counts = 1.0, p_z_mean = None, p_z_sd = 1.0, hierarchical_noise=False):
+	def __init__(self, input_size, encoder_rnn_hidden_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, num_clusters, save_dir, encoder_rnn_type='LSTM', decoder_rnn_type='LSTM', encoder_rnn_layers=1, bidirectional_encoder=True, bidirectional_decoder=False, right2left_decoder_weight=0.5, encoder_hidden_dropout = 0.0, decoder_input_dropout = 0.0, device=False, seed=1111, emission_distribution='isotropic_gaussian', decoder_self_feedback=True, esn_leak=1.0, relax_scalar=0.05, base_counts = 1.0, p_z_mean = None, p_z_sd = 1.0, hierarchical_noise=False, post_mixture_noise_prior_sd=1.0):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
 		if not self.retrieval:
 			torch.manual_seed(seed)
@@ -75,7 +75,7 @@ class Learner(object):
 				logger.info('The standard deviation of the mixture components is 1.0 for all the dimensions.'.format(feature_size=feature_size))
 			self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
 			self.mixture_ratio_sampler = model.SampleFromDirichlet(num_clusters, self.encoder.hidden_size_total, mlp_hidden_size, relax_scalar=relax_scalar, base_counts = base_counts)
-			self.mixture_components = model.SampleFromSharedIsotropicGaussians(p_z_mean, p_z_sd, num_clusters=num_clusters, ndim=feature_size)
+			self.mixture_components = model.SampleFromIsotropicGaussianMixture(p_z_mean, p_z_sd, num_clusters=num_clusters, ndim=feature_size, post_mixture_noise=hierarchical_noise, post_mixture_noise_prior_sd=post_mixture_noise_prior_sd, mlp_input_size=self.encoder.hidden_size_total, mlp_hidden_size=mlp_hidden_size)
 			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder)
 			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.mixture_ratio_sampler.parameters(), self.mixture_components.parameters(), self.decoder.parameters())
 			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
@@ -83,12 +83,9 @@ class Learner(object):
 			logger.info("# of mixture components: {num_clusters}".format(num_clusters=num_clusters))
 			logger.info("Prior distribution of the mixture ratio, pi, is Dirichlet({base_counts}).".format(base_counts=base_counts))
 			logger.info("Assignments to the mixture components are continuously relaxed by samples from Drichlet({relax_scalar} * pi)".format(relax_scalar=relax_scalar))
-			self.hierarchical_noise = hierarchical_noise
 			if hierarchical_noise:
-				logger.info('Another level of noise is added to the mixed features in prior according to the standard multivariate Gaussian N(0, I).')
+				logger.info('Another level of noise is added to the mixed features in prior according to the standard multivariate Gaussian N(0, {post_mixture_noise_prior_sd}*I).'.format(post_mixture_noise_prior_sd=post_mixture_noise_prior_sd))
 				logger.info('Posterior on the individual feature distribution is approximated by an isotropic Gaussian.')
-				self.feature_sampler = model.SampleFromDataConditionedIsotropicGaussian(self.encoder.hidden_size_total, mlp_hidden_size, feature_size)
-				self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.mixture_ratio_sampler.parameters(), self.mixture_components.parameters(), self.feature_sampler.parameters(), self.decoder.parameters())
 			logger.info('Conditioned on the features, data are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
 			logger.info('Random seed: {seed}'.format(seed = seed))
 			logger.info('Type of RNN used for the encoder: {rnn_type}'.format(rnn_type=encoder_rnn_type))
@@ -131,8 +128,6 @@ class Learner(object):
 		self.encoder.train() # Turn on training mode which enables dropout.
 		self.mixture_ratio_sampler.train()
 		self.mixture_components.train()
-		if self.hierarchical_noise:
-			self.feature_sampler.train()
 		self.decoder.train()
 		self.bce_with_logits_loss.train()
 
@@ -149,13 +144,9 @@ class Learner(object):
 			self.optimizer.zero_grad()
 
 			last_hidden = self.encoder(packed_input)
-			feature_weights,kl_weight = self.mixture_ratio_sampler(last_hidden)
-			feature_values,kl_value = self.mixture_components(packed_input.batch_sizes[0])
-			features = (feature_weights.view(feature_weights.size()+(1,)) * feature_values).sum(dim=1) # cluster_ix in dim=1.
+			cluster_weights,kl_weight = self.mixture_ratio_sampler(last_hidden)
+			features,kl_value = self.mixture_components(cluster_weights, parameter_seed=last_hidden)
 			kl_loss_per_batch = kl_weight + kl_value
-			if self.hierarchical_noise:
-				features, kl_noised = self.feature_sampler(last_hidden, features)
-				kl_loss_per_batch += kl_noised
 			emission_loss_per_batch = []
 			end_prediction_loss_per_batch = []
 			for (emission_params,flatten_offset_prediction,_), log_loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes), (self.log_left2right_decoder_weight, self.log_right2left_decoder_weight)):
@@ -196,8 +187,6 @@ class Learner(object):
 		self.encoder.eval() # Turn on evaluation mode which disables dropout.
 		self.mixture_ratio_sampler.eval()
 		self.mixture_components.eval()
-		if self.hierarchical_noise:
-			self.feature_sampler.eval()
 		self.decoder.eval()
 		self.bce_with_logits_loss.eval()
 
@@ -214,13 +203,9 @@ class Learner(object):
 				is_offset = is_offset.to(self.device)
 
 				last_hidden = self.encoder(packed_input)
-				feature_weights,kl_weight = self.mixture_ratio_sampler(last_hidden)
-				feature_values,kl_value = self.mixture_components(packed_input.batch_sizes[0])
-				features = (feature_weights.view(feature_weights.size()+(1,)) * feature_values).sum(1)
+				cluster_weights,kl_weight = self.mixture_ratio_sampler(last_hidden)
+				features,kl_value = self.mixture_components(cluster_weights, parameter_seed=last_hidden)
 				kl_loss += kl_weight + kl_value
-				if self.hierarchical_noise:
-					features, kl_noised = self.feature_sampler(last_hidden, features)
-					kl_loss += kl_noised
 				emission_loss_per_batch = []
 				end_prediction_loss_per_batch = []
 				for (emission_params,flatten_offset_prediction,_), log_loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes), (self.log_left2right_decoder_weight, self.log_right2left_decoder_weight)):
@@ -314,14 +299,13 @@ class Learner(object):
 			'base_counts':self.mixture_ratio_sampler.base_counts,
 			'num_clusters':self.mixture_ratio_sampler.num_clusters,
 			'relax_scalar':self.mixture_ratio_sampler.relax_scalar,
-			'prior_mean':self.mixture_components.prior_mean,
-			'prior_sd':self.mixture_components.prior_sd,
-			'hierarchical_noise':self.hierarchical_noise,
+			'p_z_mean':self.mixture_components.prior_mean,
+			'p_z_sd':self.mixture_components.prior_sd,
+			'hierarchical_noise':self.mixture_components.post_mixture_noise,
+			'post_mixture_noise_prior_sd':self.mixture_components.post_mixture_noise_prior_var.sqrt(),
 			'emission_distribution':self.emission_distribution,
 			'model_random_state':torch.get_rng_state(),
 		}
-		if self.hierarchical_noise:
-			checkpoint['feature_sampler'] = self.feature_sampler.state_dict()
 		if torch.cuda.is_available():
 			checkpoint['model_random_state_cuda'] = torch.cuda.get_rng_state_all()
 		if checkpoint['encoder_rnn_type'] == 'ESN':
@@ -354,9 +338,10 @@ class Learner(object):
 		num_clusters = checkpoint['num_clusters']
 		relax_scalar = checkpoint['relax_scalar']
 		base_counts = checkpoint['base_counts']
-		prior_mean = checkpoint['prior_mean']
-		prior_sd = checkpoint['prior_sd']
-		self.hierarchical_noise = checkpoint['hierarchical_noise']
+		p_z_mean = checkpoint['p_z_mean']
+		p_z_sd = checkpoint['p_z_sd']
+		hierarchical_noise = checkpoint['hierarchical_noise']
+		post_mixture_noise_prior_sd = checkpoint['post_mixture_noise_prior_sd']
 
 		if encoder_rnn_type == 'ESN' or decoder_rnn_type == 'ESN':
 			esn_leak = checkpoint['esn_leak']
@@ -368,18 +353,13 @@ class Learner(object):
 
 		self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, bidirectional=bidirectional_encoder, hidden_dropout=encoder_hidden_dropout, esn_leak=esn_leak)
 		self.mixture_ratio_sampler = model.SampleFromDirichlet(num_clusters, self.encoder.hidden_size_total, mlp_hidden_size, relax_scalar=relax_scalar, base_counts=base_counts)
-		self.mixture_components = model.SampleFromSharedIsotropicGaussians(prior_mean, prior_sd, num_clusters=num_clusters, ndim=feature_size)
+		self.mixture_components = model.SampleFromIsotropicGaussianMixture(p_z_mean, p_z_sd, num_clusters=num_clusters, ndim=feature_size, post_mixture_noise=hierarchical_noise, post_mixture_noise_prior_sd=post_mixture_noise_prior_sd, mlp_input_size=self.encoder.hidden_size_total, mlp_hidden_size=mlp_hidden_size)
 		self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, esn_leak=esn_leak, bidirectional=bidirectional_decoder)
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.mixture_ratio_sampler.load_state_dict(checkpoint['mixture_ratio_sampler'])
 		self.mixture_components.load_state_dict(checkpoint['mixture_components'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
 		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.mixture_ratio_sampler.parameters(), self.mixture_components.parameters(), self.decoder.parameters())
-		if self.hierarchical_noise:
-			self.feature_sampler = model.SampleFromDataConditionedIsotropicGaussian(self.encoder.hidden_size_total, mlp_hidden_size, feature_size)
-			self.feature_sampler.load_state_dict(checkpoint['feature_sampler'])
-			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.mixture_ratio_sampler.parameters(), self.mixture_components.parameters(), self.feature_sampler.parameters(), self.decoder.parameters())
-
 
 		self.optimizer = torch.optim.SGD(self.parameters(), lr=0.1)
 		self.optimizer.load_state_dict(checkpoint['optimizer'])

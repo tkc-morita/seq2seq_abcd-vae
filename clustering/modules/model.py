@@ -480,8 +480,6 @@ class SampleFromDirichlet(torch.nn.Module):
 		q_kappa_weights = self.to_non_negative(self.to_q_kappa_weights(weights_seed))
 		q_kappa_given_x = torch.distributions.dirichlet.Dirichlet(q_kappa_weights)
 		kappa = q_kappa_given_x.rsample()
-		# print(q_kappa_weights)
-		# print(kappa)
 
 		# Sample a shape pi of the Dirichlet prior p(kappa | pi) from q(pi) = Dirichlet(self.q_pi_weights)
 		q_pi = torch.distributions.dirichlet.Dirichlet(self.to_non_negative(self.q_pi_weights))
@@ -497,9 +495,9 @@ class SampleFromDirichlet(torch.nn.Module):
 		return kappa, kl_divergence
 
 
-class SampleFromSharedIsotropicGaussians(torch.nn.Module):
-	def __init__(self, prior_mean, prior_sd, num_clusters=None, ndim=None):
-		super(SampleFromSharedIsotropicGaussians, self).__init__()
+class SampleFromIsotropicGaussianMixture(torch.nn.Module):
+	def __init__(self, prior_mean, prior_sd, num_clusters=None, ndim=None, post_mixture_noise=False, post_mixture_noise_prior_sd=None, mlp_input_size=None, mlp_hidden_size=None):
+		super(SampleFromIsotropicGaussianMixture, self).__init__()
 		if isinstance(prior_mean,float):
 			assert not (ndim is None or num_clusters is None), 'num_clusters and ndim must be specified when prior_mean is a scalar.'
 			prior_mean = torch.ones((num_clusters, ndim)) * prior_mean
@@ -508,45 +506,53 @@ class SampleFromSharedIsotropicGaussians(torch.nn.Module):
 			prior_sd = torch.ones((num_clusters, ndim)) * prior_mean
 		self.prior_mean = prior_mean
 		self.prior_sd = prior_sd
-		self.p_z = torch.distributions.normal.Normal(self.prior_mean, self.prior_sd)
+		self.post_mixture_noise = post_mixture_noise
+		if post_mixture_noise_prior_sd is None:
+			post_mixture_noise_prior_sd = 1.0
+		if isinstance(post_mixture_noise_prior_sd, float):
+			post_mixture_noise_prior_sd = torch.ones(self.prior_sd.size(-1)) * post_mixture_noise_prior_sd
+		self.post_mixture_noise_prior_var =post_mixture_noise_prior_sd.pow(2)
+		if post_mixture_noise:
+			self.to_parameters = MLP_To_k_Vecs(mlp_input_size, mlp_hidden_size, self.prior_sd.size(-1), 2)
+		else:
+			self.prior_distr = torch.distributions.normal.Normal(self.prior_mean, self.prior_sd)
+			self.register_parameter(
+					'posterior_mean',
+					torch.nn.Parameter(
+						torch.randn_like(prior_mean)+self.prior_mean,
+						requires_grad=True)
+					)
 
-		self.register_parameter(
-				'q_z_mean',
-				torch.nn.Parameter(
-					torch.randn_like(prior_mean)+self.prior_mean,
-					requires_grad=True)
-				)
+			self.register_parameter(
+					'posterior_log_var',
+					torch.nn.Parameter(
+						torch.randn_like(prior_sd.log()*2.0),
+						requires_grad=True)
+					)
 
-		self.register_parameter(
-				'q_z_log_var',
-				torch.nn.Parameter(
-					torch.randn_like(prior_sd.log()*2.0),
-					requires_grad=True)
-				)
+	def forward(self, cluster_weights, parameter_seed=None):
+		# broadcast cluster_weights
+		cluster_weights = cluster_weights.view(cluster_weights.size()+(1,))
+		if self.post_mixture_noise: # Two-level Gaussian noise, one for each cluster, the other for post mixture.
+			# Sample values on mixture components from the posterior q(z | x) = N(posterior_mean, posterior_distr_sd).
+			posterior_mean, posterior_log_var = self.to_parameters(parameter_seed)
+			posterior_distr = torch.distributions.normal.Normal(posterior_mean, (0.5 * posterior_log_var).exp())
+			samples = posterior_distr.rsample()
 
-	def forward(self, batch_size):
-		# Sample values on mixture components from q(z) = N(q_z_mean, q_z_sd).
-		q_z = torch.distributions.normal.Normal(self.q_z_mean, (0.5 * self.q_z_log_var).exp())
-		z = q_z.rsample((batch_size,))
+			# Get the prior distribution given the cluster_weights, p(z | cluster_weights).
+			prior_distr = torch.distributions.normal.Normal(
+				(self.prior_mean.view((1,)+self.prior_mean.size()) * cluster_weights).sum(1),
+				((self.prior_sd.view((1,)+self.prior_sd.size()) * cluster_weights).pow(2).sum(1) + self.post_mixture_noise_prior_var.view((1,)+self.post_mixture_noise_prior_var.size())).sqrt()
+			)
 
-		# Measure the KL divergence between q(z) and p(z).
-		kl_divergence = torch.distributions.kl_divergence(q_z, self.p_z).sum() / batch_size
-		return z, kl_divergence
+			# Measure the KL divergence between the posterior q(z | x) and the prior p(z | cluster_weights).
+			kl_divergence = torch.distributions.kl_divergence(posterior_distr, prior_distr).sum()
+		else: # The only noise is of each cluster's Gaussian.
+			# Sample values on mixture components from q(z) = N(posterior_mean, posterior_distr_sd).
+			posterior_distr = torch.distributions.normal.Normal(self.posterior_mean, (0.5 * self.posterior_log_var).exp())
+			samples = posterior_distr.rsample((cluster_weights.size(0),))
+			samples = (cluster_weights * samples).sum(1)
 
-
-class SampleFromDataConditionedIsotropicGaussian(torch.nn.Module):
-	def __init__(self, mlp_input_size, mlp_hidden_size, ndim):
-		super(SampleFromDataConditionedIsotropicGaussian, self).__init__()
-		self.to_parameters = MLP_To_k_Vecs(mlp_input_size, mlp_hidden_size, ndim, 2)
-
-	def forward(self, parameter_seed, prior_mean, prior_sd = None):
-		mean,log_var = self.to_parameters(parameter_seed)
-		posterior_distr = torch.distributions.normal.Normal(mean, (0.5 * log_var).exp())
-		samples = posterior_distr.rsample()
-		
-		if prior_sd is None:
-			prior_sd = torch.ones_like(prior_mean)
-		prior_distr = torch.distributions.normal.Normal(prior_mean, prior_sd)
-		
-		kl_divergence = torch.distributions.kl_divergence(posterior_distr, prior_distr).sum()
+			# Measure the KL divergence between q(z) and p(z).
+			kl_divergence = torch.distributions.kl_divergence(posterior_distr, self.prior_distr).sum() / cluster_weights.size(0)
 		return samples, kl_divergence
