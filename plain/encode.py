@@ -62,6 +62,7 @@ def get_parameters():
 	par_parser.add_argument('input_root', type=str, help='Path to the root directory under which inputs are located.')
 	par_parser.add_argument('annotation_file', type=str, help='Path to the annotation csv file.')
 	par_parser.add_argument('data_normalizer', type=float, help='Normalizing constant to devide the data.')
+	par_parser.add_argument('--annotation_sep', type=str, default=',', help='Separator symbol of the annotation file. Comma "," by default (i.e., csv).')
 	par_parser.add_argument('-d', '--device', type=str, default='cpu', help='Computing device.')
 	par_parser.add_argument('-S', '--save_path', type=str, default=None, help='Path to the file where results are saved.')
 	par_parser.add_argument('--fft_frame_length', type=float, default=0.008, help='FFT frame length in sec.')
@@ -81,7 +82,7 @@ if __name__ == '__main__':
 	if save_path is None:
 		save_path = os.path.join(parameters.input_root, 'autoencoded.csv')
 
-	data_parser = data_utils.Data_Parser(parameters.input_root, parameters.annotation_file)
+	data_parser = data_utils.Data_Parser(parameters.input_root, parameters.annotation_file, annotation_sep=parameters.annotation_sep)
 	fs = data_parser.get_sample_freq() # Assuming all the wav files have the same fs, get the 1st file's.
 
 	fft_frame_length = int(np.floor(parameters.fft_frame_length * fs))

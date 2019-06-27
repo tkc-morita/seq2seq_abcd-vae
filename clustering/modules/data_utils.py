@@ -10,8 +10,8 @@ import warnings
 warnings.simplefilter("error")
 
 class Data_Parser(object):
-	def __init__(self, input_root, annotation_file, data_type_col_name = 'data_type'):
-		self.df_annotation = pd.read_csv(annotation_file)
+	def __init__(self, input_root, annotation_file, data_type_col_name = 'data_type', annotation_sep=','):
+		self.df_annotation = pd.read_csv(annotation_file, sep=annotation_sep)
 		self.input_root = input_root
 		self.data_type_col_name = data_type_col_name
 

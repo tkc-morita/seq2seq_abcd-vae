@@ -346,6 +346,7 @@ def get_parameters():
 
 	par_parser.add_argument('input_root', type=str, help='Path to the root directory under which inputs are located.')
 	par_parser.add_argument('annotation_file', type=str, help='Path to the annotation csv file.')
+	par_parser.add_argument('--annotation_sep', type=str, default=',', help='Separator symbol of the annotation file. Comma "," by default (i.e., csv).')
 	par_parser.add_argument('-e', '--epochs', type=int, default=40, help='# of epochs to train the model.')
 	par_parser.add_argument('-b', '--batch_size', type=int, default=16, help='Batch size for training.')
 	par_parser.add_argument('-l', '--learning_rate', type=float, default=1.0, help='Initial learning rate.')
@@ -398,7 +399,7 @@ if __name__ == '__main__':
 		save_root = parameters.input_root
 	save_dir = get_save_dir(save_root, parameters.job_id)
 
-	data_parser = data_utils.Data_Parser(parameters.input_root, parameters.annotation_file)
+	data_parser = data_utils.Data_Parser(parameters.input_root, parameters.annotation_file, annotation_sep=parameters.annotation_sep)
 	fs = data_parser.get_sample_freq() # Assuming all the wav files have the same fs, get the 1st file's.
 
 	fft_frame_length = int(np.floor(parameters.fft_frame_length * fs))
