@@ -15,7 +15,7 @@ class Data_Parser(object):
 		self.input_root = input_root
 		self.data_type_col_name = data_type_col_name
 
-	def get_data(self, data_type = None, transform = None,):
+	def get_data(self, data_type = None, transform = None, channel=0):
 		if data_type is None:
 			sub_df = self.df_annotation.copy()
 		else:
@@ -24,6 +24,7 @@ class Data_Parser(object):
 						sub_df,
 						self.input_root,
 						transform=transform,
+						channel=channel
 						)
 
 
@@ -35,10 +36,11 @@ class Data_Parser(object):
 
 
 class Dataset(torch.utils.data.Dataset):
-	def __init__(self, df_annotation, input_root, transform = None):
+	def __init__(self, df_annotation, input_root, transform = None, channel=0):
 		self.df_annotation = df_annotation
 		self.input_root = input_root
 		self.transform = transform
+		self.channel = channel
 		self.get_discrete_bounds()
 
 	def get_discrete_bounds(self):
@@ -65,7 +67,7 @@ class Dataset(torch.utils.data.Dataset):
 		input_path = self.df_annotation.loc[ix, 'input_path']
 		_, input_data = spw.read(os.path.join(self.input_root, input_path))
 		if input_data.ndim > 1:
-			input_data = input_data[:,0] # Use the 1st ch.
+			input_data = input_data[:,self.channel] # Use the 1st ch.
 		input_data = input_data[self.df_annotation.loc[ix, 'onset_ix']:self.df_annotation.loc[ix, 'offset_ix']].astype(np.float32)
 
 		if self.transform:
