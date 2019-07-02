@@ -101,7 +101,6 @@ if __name__ == '__main__':
 	df_encoded = encoder.encode_dataset(dataset, parameter_ix2name=parameter_ix2name, batch_size=parameters.batch_size)
 	df_encoded = df_encoded.sort_values('data_ix')
 	if 'label' in data_parser.df_annotation.columns:
-		print(data_parser.df_annotation.head())
 		df_encoded = df_encoded.merge(data_parser.df_annotation, how='left', left_on='data_ix', right_index=True)
 	df_encoded.to_csv(save_path, index=False)
 
