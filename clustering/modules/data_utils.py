@@ -14,6 +14,17 @@ class Data_Parser(object):
 		self.df_annotation = pd.read_csv(annotation_file, sep=annotation_sep)
 		self.input_root = input_root
 		self.data_type_col_name = data_type_col_name
+		self.index_speakers()
+
+	def index_speakers(self):
+		if 'speaker' in self.df_annotation.columns:
+			speaker2ix = {spk:ix for ix,spk in enumerate(self.df_annotation.speaker.unique())}
+			self.df_annotation.loc[:,'speaker'] = self.df_annotation.speaker.map(speaker2ix)
+		else:
+			self.df_annotation['speaker'] = float('nan')
+
+	def get_num_speakers(self):
+		return len(self.df_annotation.speaker.unique())
 
 	def get_data(self, data_type = None, transform = None, channel=0):
 		if data_type is None:
@@ -46,7 +57,7 @@ class Dataset(torch.utils.data.Dataset):
 	def get_discrete_bounds(self):
 		self.max_abs = 0.0
 		for input_path,sub_df in self.df_annotation.groupby('input_path'):
-			fs, input_data = spw.read(os.path.join(self.input_root, input_path))
+			fs, _ = spw.read(os.path.join(self.input_root, input_path))
 			onset_ix = (sub_df.onset * fs).map(np.ceil)
 			offset_ix = (sub_df.offset * fs).map(np.floor)
 			self.df_annotation.loc[sub_df.index, 'onset_ix'] = onset_ix
@@ -67,12 +78,14 @@ class Dataset(torch.utils.data.Dataset):
 		input_path = self.df_annotation.loc[ix, 'input_path']
 		_, input_data = spw.read(os.path.join(self.input_root, input_path))
 		if input_data.ndim > 1:
-			input_data = input_data[:,self.channel] # Use the 1st ch.
+			input_data = input_data[:,self.channel] # Use only one channel.
 		input_data = input_data[self.df_annotation.loc[ix, 'onset_ix']:self.df_annotation.loc[ix, 'offset_ix']].astype(np.float32)
+
+		speaker = self.df_annotation.loc[ix, 'speaker']
 
 		if self.transform:
 			input_data = self.transform(input_data)
-		return input_data
+		return input_data, speaker
 
 
 class ToTensor(object):
@@ -135,15 +148,18 @@ class DataLoader(object):
 		batch_ix = self.batch_order.pop()
 		ixs = self.batches[batch_ix]
 		batched_input = []
+		speakers = []
 		is_offset = []
 		for ix in ixs:
-			seq = self.dataset[ix]
+			seq,spk = self.dataset[ix]
 			batched_input.append(seq)
+			speakers.append(spk)
 			l = seq.size(0)
 			is_offset.append(torch.tensor([0.0]*(l-1)+[1.0]))
 		batched_input = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(batched_input)
 		is_offset = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(is_offset)
-		return batched_input, is_offset, ixs
+		speakers = torch.tensor(speakers)
+		return batched_input, is_offset, speakers, ixs
 
 	def get_num_batches(self):
 		return len(self.batches)

@@ -34,7 +34,30 @@ def update_log_handler(file_dir):
 
 
 class Learner(object):
-	def __init__(self, input_size, encoder_rnn_hidden_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, save_dir, encoder_rnn_type='LSTM', decoder_rnn_type='LSTM', encoder_rnn_layers=1, bidirectional_encoder=True, bidirectional_decoder=False, right2left_decoder_weight=0.5, encoder_hidden_dropout = 0.0, decoder_input_dropout = 0.0, device=False, seed=1111, feature_distribution='isotropic_gaussian', emission_distribution='isotropic_gaussian', decoder_self_feedback=True, esn_leak=1.0):
+	def __init__(self,
+			input_size,
+			encoder_rnn_hidden_size,
+			decoder_rnn_hidden_size,
+			mlp_hidden_size,
+			feature_size,
+			save_dir,
+			encoder_rnn_type='LSTM',
+			decoder_rnn_type='LSTM',
+			encoder_rnn_layers=1,
+			bidirectional_encoder=True,
+			bidirectional_decoder=False,
+			right2left_decoder_weight=0.5,
+			encoder_hidden_dropout = 0.0,
+			decoder_input_dropout = 0.0,
+			device=False,
+			seed=1111,
+			feature_distribution='isotropic_gaussian',
+			emission_distribution='isotropic_gaussian',
+			decoder_self_feedback=True,
+			esn_leak=1.0,
+			num_speakers=None,
+			speaker_embed_dim=None
+			):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
 		if not self.retrieval:
 			torch.manual_seed(seed)
@@ -66,7 +89,7 @@ class Learner(object):
 				logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
 				encoder_hidden_dropout = 0.0
 			self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
-			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder)
+			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
 			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
 			logger.info('Features are assumed to be distributed according to {feature_distribution}.'.format(feature_distribution=feature_distribution))
 			logger.info('Conditioned on the features, data are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
@@ -92,6 +115,10 @@ class Learner(object):
 				logger.info("Dropout rate in the input to the decoder RNN: {do}".format(do=decoder_input_dropout))
 			if encoder_rnn_type == 'ESN' or decoder_rnn_type == 'ESN':
 				logger.info('ESN leak: {leak}'.format(leak=esn_leak))
+			if not speaker_embed_dim is None:
+				logger.info("Speaker ID # is embedded and fed to the decoder.")
+				logger.info("# of speakers: {num_speakers}".format(num_speakers=num_speakers))
+				logger.info("Embedding dimension: {speaker_embed_dim}".format(speaker_embed_dim=speaker_embed_dim))
 			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters())
 
 		self.encoder.to(self.device)
@@ -114,9 +141,10 @@ class Learner(object):
 
 		num_batches = dataloader.get_num_batches()
 
-		for batch_ix,(packed_input, is_offset, _) in enumerate(dataloader, 1):
+		for batch_ix,(packed_input, is_offset, speaker, _) in enumerate(dataloader, 1):
 			packed_input = packed_input.to(self.device)
 			is_offset = is_offset.to(self.device)
+			speaker = speaker.to(self.device)
 
 			self.optimizer.zero_grad()
 
@@ -124,7 +152,7 @@ class Learner(object):
 			features = self.feature_sampler(*feature_params)
 			emission_loss_per_batch = []
 			end_prediction_loss_per_batch = []
-			for (emission_params,flatten_offset_prediction,_), log_loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes), (self.log_left2right_decoder_weight, self.log_right2left_decoder_weight)):
+			for (emission_params,flatten_offset_prediction,_), log_loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker), (self.log_left2right_decoder_weight, self.log_right2left_decoder_weight)):
 				emission_loss_per_batch += [-self.log_pdf_emission(packed_input.data, *emission_params) + log_loss_weight]
 				end_prediction_loss_per_batch += [self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data) + log_loss_weight]
 			emission_loss_per_batch = torch.stack(emission_loss_per_batch).logsumexp(dim=0)
@@ -171,15 +199,16 @@ class Learner(object):
 		num_batches = dataloader.get_num_batches()
 
 		with torch.no_grad():
-			for batch_ix, (packed_input, is_offset, _) in enumerate(dataloader, 1):
+			for batch_ix, (packed_input, is_offset, speaker, _) in enumerate(dataloader, 1):
 				packed_input = packed_input.to(self.device)
 				is_offset = is_offset.to(self.device)
+				speaker = speaker.to(self.device)
 
 				feature_params = self.encoder(packed_input)
 				features = self.feature_sampler(*feature_params)
 				emission_loss_per_batch = []
 				end_prediction_loss_per_batch = []
-				for (emission_params,flatten_offset_prediction,_), log_loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes), (self.log_left2right_decoder_weight, self.log_right2left_decoder_weight)):
+				for (emission_params,flatten_offset_prediction,_), log_loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker), (self.log_left2right_decoder_weight, self.log_right2left_decoder_weight)):
 					emission_loss_per_batch += [-self.log_pdf_emission(packed_input.data, *emission_params) + log_loss_weight]
 					end_prediction_loss_per_batch += [self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data) + log_loss_weight]
 				emission_loss += torch.stack(emission_loss_per_batch).logsumexp(dim=0).item()
@@ -265,7 +294,7 @@ class Learner(object):
 			'encoder_hidden_dropout':self.encoder.rnn.dropout,
 			'decoder_input_dropout':self.decoder.rnn_cell.drop.p,
 			'mlp_hidden_size':self.encoder.to_parameters.mlps[0].hidden_size,
-			'feature_size':self.decoder.feature2hidden.in_features,
+			'feature_size':self.decoder.feature_size,
 			'feature_distribution':self.feature_distribution,
 			'emission_distribution':self.emission_distribution,
 			'model_random_state':torch.get_rng_state(),
@@ -276,6 +305,9 @@ class Learner(object):
 			checkpoint['esn_leak'] = self.encoder.rnn.leak
 		elif checkpoint['decoder_rnn_type'] == 'ESN':
 			checkpoint['esn_leak'] = self.decoder.rnn_cell.cell.leak
+		if not self.decoder.embed_speaker is None:
+			checkpoint['num_speakers'] = self.decoder.embed_speaker.num_embeddings
+			checkpoint['speaker_embed_dim'] = self.decoder.embed_speaker.embedding_dim
 		torch.save(checkpoint, os.path.join(self.save_dir, 'checkpoint.pt'))
 		logger.info('Config successfully saved.')
 
@@ -311,6 +343,12 @@ class Learner(object):
 			esn_leak = checkpoint['esn_leak']
 		else:
 			esn_leak = 1.0
+		if 'num_speakers' in checkpoint:
+			num_speakers = checkpoint['num_speakers']
+			speaker_embed_dim = checkpoint['speaker_embed_dim']
+		else:
+			num_speakers = None
+			speaker_embed_dim = None
 
 		self.feature_distribution = checkpoint['feature_distribution']
 		self.emission_distribution = checkpoint['emission_distribution']
@@ -318,7 +356,7 @@ class Learner(object):
 		emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 
 		self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, bidirectional=bidirectional_encoder, hidden_dropout=encoder_hidden_dropout, esn_leak=esn_leak)
-		self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, esn_leak=esn_leak, bidirectional=bidirectional_decoder)
+		self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, esn_leak=esn_leak, bidirectional=bidirectional_decoder, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
 
@@ -378,6 +416,7 @@ def get_parameters():
 	par_parser.add_argument('-p', '--patience', type=int, default=0, help='# of epochs before updating the learning rate.')
 	par_parser.add_argument('-N','--data_normalizer', type=float, default=1.0, help='Normalizing constant to devide the data.')
 	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
+	par_parser.add_argument('--speaker_embed_dim', type=int, default=None, help='If specified, the decoder receives an embedding of the speaker ID with the specified dim. No embedding by default.')
 	# par_parser.add_argument('--retrieve', type=str, help='Path to a directory with previous training results. Retrieve previous training.')
 
 	return par_parser.parse_args()
@@ -402,6 +441,7 @@ if __name__ == '__main__':
 
 	data_parser = data_utils.Data_Parser(parameters.input_root, parameters.annotation_file, annotation_sep=parameters.annotation_sep)
 	fs = data_parser.get_sample_freq() # Assuming all the wav files have the same fs, get the 1st file's.
+	num_speakers = data_parser.get_num_speakers()
 
 	fft_frame_length = int(np.floor(parameters.fft_frame_length * fs))
 	fft_step_size = int(np.floor(parameters.fft_step_size * fs))
@@ -426,7 +466,9 @@ if __name__ == '__main__':
 				seed = parameters.seed,
 				decoder_self_feedback=not parameters.greedy_decoder,
 				bidirectional_decoder=parameters.bidirectional_decoder,
-				right2left_decoder_weight=parameters.right2left_decoder_weight
+				right2left_decoder_weight=parameters.right2left_decoder_weight,
+				num_speakers=num_speakers,
+				speaker_embed_dim=parameters.speaker_embed_dim
 				)
 
 	to_tensor = data_utils.ToTensor()

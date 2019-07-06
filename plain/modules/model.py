@@ -70,7 +70,7 @@ class RNN_Variational_Decoder(torch.nn.Module):
 	Kingma and Willing 2014. Auto-Encoding Variational Bayes.
 	Bowman et al. 2016. Generating Sentences from a Continuous Space.
 	"""
-	def __init__(self, output_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type='LSTM', rnn_layers=1, input_dropout = 0.0, self_feedback=True, bidirectional=False, esn_leak=1.0):
+	def __init__(self, output_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type='LSTM', rnn_layers=1, input_dropout = 0.0, self_feedback=True, bidirectional=False, esn_leak=1.0, num_speakers = None, speaker_embed_dim=None):
 		super(RNN_Variational_Decoder, self).__init__()
 		assert rnn_layers==1, 'Only rnn_layers=1 is currently supported.'
 		if not self_feedback:
@@ -91,13 +91,19 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			self.rnn_cell_reverse = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, input_dropout=input_dropout, esn_leak=esn_leak)
 			self.offset_predictor_reverse = MLP(rnn_hidden_size, mlp_hidden_size, 1)
 			self.to_parameters_reverse = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 2)
+		self.feature_size = feature_size # Save the feature_size w/o speaker_embed_dim.
+		if num_speakers is None or speaker_embed_dim is None:
+			self.embed_speaker = None
+		else:
+			self.embed_speaker = torch.nn.Embedding(num_speakers, speaker_embed_dim, sparse=True)
+			feature_size += speaker_embed_dim
 		self.feature2hidden = torch.nn.Linear(feature_size, hidden_size_total)
 		self.to_parameters = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 2)
 		self.offset_predictor = MLP(rnn_hidden_size, mlp_hidden_size, 1)
 		self.emission_sampler = emission_sampler
 		self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, input_dropout=input_dropout, esn_leak=esn_leak)
 
-	def forward(self, features, lengths=None, batch_sizes=None):
+	def forward(self, features, lengths=None, batch_sizes=None, speaker=None):
 		"""
 		The output is "flatten", meaning that it's PackedSequence.data.
 		This should be sufficient for the training purpose etc. while we can avoid padding, which would affect the autograd and thus requires masking in the loss calculation.
@@ -105,6 +111,9 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		assert (not lengths is None) or (not batch_sizes is None), 'Either lengths or batch_sizes must be given.'
 		if not lengths is None: # Mainly for the post training process.
 			batch_sizes = self._length_to_batch_sizes(lengths)
+		if not self.embed_speaker is None:
+			speaker_embedding = self.embed_speaker(speaker)
+			features = torch.cat([features,speaker_embedding], dim=-1)
 		if self.bidirectional:
 			return self._forward_bidirectional(features, batch_sizes)
 		else:
