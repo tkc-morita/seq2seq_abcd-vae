@@ -217,7 +217,7 @@ class Learner(object):
 		logger.info('mean training total loss (per string): {:5.4f}'.format(mean_loss))
 
 
-	def test_or_validate(self, dataloader):
+	def test_or_validate(self, dataloader, train_data_size):
 		"""
 		Test/validation phase. No update of weights.
 		"""
@@ -233,7 +233,6 @@ class Learner(object):
 		sign_loss = 0
 
 		num_batches = dataloader.get_num_batches()
-		num_strings = len(dataloader.dataset)
 
 		with torch.no_grad():
 			for batch_ix, (packed_input, is_offset, speaker, _) in enumerate(dataloader, 1):
@@ -242,8 +241,8 @@ class Learner(object):
 				speaker = speaker.to(self.device)
 
 				last_hidden = self.encoder(packed_input)
-				cluster_weights,kl_weight,_ = self.mixture_ratio_sampler(last_hidden, num_strings)
-				features,kl_value,_ = self.mixture_components(cluster_weights, num_strings, parameter_seed=last_hidden)
+				cluster_weights,kl_weight,_ = self.mixture_ratio_sampler(last_hidden, train_data_size)
+				features,kl_value,_ = self.mixture_components(cluster_weights, train_data_size, parameter_seed=last_hidden)
 				kl_loss += kl_weight + kl_value
 				emission_loss_per_batch = []
 				end_prediction_loss_per_batch = []
@@ -255,6 +254,7 @@ class Learner(object):
 
 				logger.info('{batch_ix}/{num_batches} validation batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
 
+		num_strings = len(dataloader.dataset)
 		emission_loss /= num_strings
 		end_prediction_loss /= num_strings
 		kl_loss /= num_strings
@@ -296,7 +296,7 @@ class Learner(object):
 			logger.info('end of TRAINING phase.')
 
 			logger.info('start of VALIDATION phase.')
-			mean_valid_loss = self.test_or_validate(valid_dataloader)
+			mean_valid_loss = self.test_or_validate(valid_dataloader, len(train_dataloader.dataset))
 			logger.info('end of VALIDATION phase.')
 
 			self.lr_scheduler.step(mean_valid_loss)
