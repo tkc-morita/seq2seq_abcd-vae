@@ -487,7 +487,7 @@ class SampleFromDirichlet(torch.nn.Module):
 		self.to_non_negative = (lambda x: torch.nn.ELU()(x) + 1.0 + posterior_base_counts)
 
 
-	def forward(self, weights_seed):
+	def forward(self, weights_seed, entire_data_size):
 		# Sample a relaxed category assignment kappa from q(kappa | x) = Dirichlet(q_kappa_weights).
 		q_kappa_weights = self.to_non_negative(self.to_q_kappa_weights(weights_seed))
 		q_kappa_given_x = torch.distributions.dirichlet.Dirichlet(q_kappa_weights)
@@ -499,7 +499,7 @@ class SampleFromDirichlet(torch.nn.Module):
 		pi = q_pi.rsample(sample_shape=(kappa.size(0),))
 
 		# Compute the KL divergence between q(pi) and p(pi).
-		kl_divergence = torch.distributions.kl_divergence(q_pi, self.p_pi) / kappa.size(0)
+		kl_divergence = torch.distributions.kl_divergence(q_pi, self.p_pi) / entire_data_size
 
 		# Compute the KL divergence between q(kappa | x) and p(kappa | pi).
 		p_kappa_given_pi = torch.distributions.dirichlet.Dirichlet(self.relax_scalar * pi)
@@ -543,7 +543,7 @@ class SampleFromIsotropicGaussianMixture(torch.nn.Module):
 						requires_grad=True)
 					)
 
-	def forward(self, cluster_weights, parameter_seed=None):
+	def forward(self, cluster_weights, entire_data_size, parameter_seed=None):
 		# broadcast cluster_weights
 		cluster_weights = cluster_weights.view(cluster_weights.size()+(1,))
 		if self.post_mixture_noise: # Two-level Gaussian noise, one for each cluster, the other for post mixture.
@@ -567,6 +567,6 @@ class SampleFromIsotropicGaussianMixture(torch.nn.Module):
 			samples = (cluster_weights * samples).sum(1)
 
 			# Measure the KL divergence between q(z) and p(z).
-			kl_divergence = torch.distributions.kl_divergence(posterior_distr, self.prior_distr).sum() / cluster_weights.size(0)
+			kl_divergence = torch.distributions.kl_divergence(posterior_distr, self.prior_distr).sum() / entire_data_size
 			posterior_mean, posterior_log_var = self.posterior_mean, self.posterior_log_var
 		return samples, kl_divergence, (posterior_mean, posterior_log_var)

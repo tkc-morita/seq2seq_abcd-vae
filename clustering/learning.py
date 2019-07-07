@@ -172,6 +172,7 @@ class Learner(object):
 		kl_loss = 0
 
 		num_batches = dataloader.get_num_batches()
+		num_strings = len(dataloader.dataset)
 
 		for batch_ix,(packed_input, is_offset, speaker, _) in enumerate(dataloader, 1):
 			packed_input = packed_input.to(self.device)
@@ -181,8 +182,8 @@ class Learner(object):
 			self.optimizer.zero_grad()
 
 			last_hidden = self.encoder(packed_input)
-			cluster_weights,kl_weight,_ = self.mixture_ratio_sampler(last_hidden)
-			features,kl_value,_ = self.mixture_components(cluster_weights, parameter_seed=last_hidden)
+			cluster_weights,kl_weight,_ = self.mixture_ratio_sampler(last_hidden, num_strings)
+			features,kl_value,_ = self.mixture_components(cluster_weights, num_strings, parameter_seed=last_hidden)
 			kl_loss_per_batch = kl_weight + kl_value
 			emission_loss_per_batch = []
 			end_prediction_loss_per_batch = []
@@ -206,7 +207,6 @@ class Learner(object):
 
 			logger.info('{batch_ix}/{num_batches} training batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
 
-		num_strings = len(dataloader.dataset)
 		emission_loss /= num_strings
 		end_prediction_loss /= num_strings
 		kl_loss /= num_strings
@@ -233,6 +233,7 @@ class Learner(object):
 		sign_loss = 0
 
 		num_batches = dataloader.get_num_batches()
+		num_strings = len(dataloader.dataset)
 
 		with torch.no_grad():
 			for batch_ix, (packed_input, is_offset, speaker, _) in enumerate(dataloader, 1):
@@ -241,8 +242,8 @@ class Learner(object):
 				speaker = speaker.to(self.device)
 
 				last_hidden = self.encoder(packed_input)
-				cluster_weights,kl_weight,_ = self.mixture_ratio_sampler(last_hidden)
-				features,kl_value,_ = self.mixture_components(cluster_weights, parameter_seed=last_hidden)
+				cluster_weights,kl_weight,_ = self.mixture_ratio_sampler(last_hidden, num_strings)
+				features,kl_value,_ = self.mixture_components(cluster_weights, num_strings, parameter_seed=last_hidden)
 				kl_loss += kl_weight + kl_value
 				emission_loss_per_batch = []
 				end_prediction_loss_per_batch = []
@@ -254,7 +255,6 @@ class Learner(object):
 
 				logger.info('{batch_ix}/{num_batches} validation batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
 
-		num_strings = len(dataloader.dataset)
 		emission_loss /= num_strings
 		end_prediction_loss /= num_strings
 		kl_loss /= num_strings
