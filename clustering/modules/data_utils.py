@@ -123,6 +123,14 @@ class STFT(object):
 						).contiguous()
 		return transformed
 
+class Compose(object):
+	def __init__(self, transforms):
+		self.transforms = transforms
+
+	def __call__(self, data):
+		for trans in self.transforms:
+			data = trans(data)
+		return data
 
 class DataLoader(object):
 	def __init__(self, dataset, batch_size=1, shuffle=False):

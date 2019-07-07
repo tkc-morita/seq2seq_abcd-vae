@@ -478,8 +478,8 @@ class SampleFromDirichlet(torch.nn.Module):
 
 		if isinstance(prior_base_counts, float):
 			prior_base_counts = torch.ones_like(self.q_pi_weights, requires_grad=False)
-		self.prior_base_counts = prior_base_counts
-		self.p_pi = torch.distributions.dirichlet.Dirichlet(prior_base_counts)
+		self.register_parameter('prior_base_counts', torch.nn.Parameter(prior_base_counts, requires_grad=False))
+		self.p_pi = torch.distributions.dirichlet.Dirichlet(self.prior_base_counts)
 		self.to_q_kappa_weights = MLP(mlp_input_size, mlp_hidden_size, num_clusters)
 		if posterior_base_counts is None:
 			posterior_base_counts = 0.1 / num_clusters
@@ -509,7 +509,7 @@ class SampleFromDirichlet(torch.nn.Module):
 
 
 class SampleFromIsotropicGaussianMixture(torch.nn.Module):
-	def __init__(self, prior_mean, prior_sd, num_clusters=None, ndim=None, post_mixture_noise=False, post_mixture_noise_prior_sd=None, mlp_input_size=None, mlp_hidden_size=None):
+	def __init__(self, prior_mean=0.0, prior_sd=1.0, num_clusters=None, ndim=None, post_mixture_noise=False, post_mixture_noise_prior_sd=None, mlp_input_size=None, mlp_hidden_size=None):
 		super(SampleFromIsotropicGaussianMixture, self).__init__()
 		if isinstance(prior_mean,float):
 			assert not (ndim is None or num_clusters is None), 'num_clusters and ndim must be specified when prior_mean is a scalar.'
@@ -517,14 +517,14 @@ class SampleFromIsotropicGaussianMixture(torch.nn.Module):
 		if isinstance(prior_sd,float):
 			assert not (ndim is None or num_clusters is None), 'num_clusters and ndim must be specified when prior_mean is a scalar.'
 			prior_sd = torch.ones((num_clusters, ndim)) * prior_mean
-		self.prior_mean = prior_mean
-		self.prior_sd = prior_sd
+		self.register_parameter('prior_mean', torch.nn.Parameter(prior_mean, requires_grad=False))
+		self.register_parameter('prior_sd', torch.nn.Parameter(prior_sd, requires_grad=False))
 		self.post_mixture_noise = post_mixture_noise
 		if post_mixture_noise_prior_sd is None:
 			post_mixture_noise_prior_sd = 1.0
 		if isinstance(post_mixture_noise_prior_sd, float):
 			post_mixture_noise_prior_sd = torch.ones(self.prior_sd.size(-1)) * post_mixture_noise_prior_sd
-		self.post_mixture_noise_prior_var =post_mixture_noise_prior_sd.pow(2)
+		self.register_parameter('post_mixture_noise_prior_var', torch.nn.Parameter(post_mixture_noise_prior_sd.pow(2), requires_grad=False))
 		if post_mixture_noise:
 			self.to_parameters = MLP_To_k_Vecs(mlp_input_size, mlp_hidden_size, self.prior_sd.size(-1), 2)
 		else:

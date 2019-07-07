@@ -1,7 +1,7 @@
 # coding: utf-8
 
 import torch
-from torchvision.transforms import Compose
+from modules.data_utils import Compose
 import numpy as np
 from modules import model, data_utils
 from logging import getLogger,FileHandler,DEBUG,Formatter
@@ -334,14 +334,10 @@ class Learner(object):
 			'decoder_input_dropout':self.decoder.rnn_cell.drop.p,
 			'mlp_hidden_size':self.decoder.offset_predictor.hidden_size,
 			'feature_size':self.decoder.feature_size,
-			'prior_base_counts':self.mixture_ratio_sampler.prior_base_counts,
 			'posterior_base_counts':self.mixture_ratio_sampler.posterior_base_counts,
 			'num_clusters':self.mixture_ratio_sampler.num_clusters,
 			'relax_scalar':self.mixture_ratio_sampler.relax_scalar,
-			'p_z_mean':self.mixture_components.prior_mean,
-			'p_z_sd':self.mixture_components.prior_sd,
 			'hierarchical_noise':self.mixture_components.post_mixture_noise,
-			'post_mixture_noise_prior_sd':self.mixture_components.post_mixture_noise_prior_var.sqrt(),
 			'emission_distribution':self.emission_distribution,
 			'model_random_state':torch.get_rng_state(),
 		}
@@ -379,12 +375,8 @@ class Learner(object):
 		mlp_hidden_size = checkpoint['mlp_hidden_size']
 		num_clusters = checkpoint['num_clusters']
 		relax_scalar = checkpoint['relax_scalar']
-		prior_base_counts = checkpoint['prior_base_counts']
 		posterior_base_counts = checkpoint['posterior_base_counts']
-		p_z_mean = checkpoint['p_z_mean']
-		p_z_sd = checkpoint['p_z_sd']
 		hierarchical_noise = checkpoint['hierarchical_noise']
-		post_mixture_noise_prior_sd = checkpoint['post_mixture_noise_prior_sd']
 
 		if encoder_rnn_type == 'ESN' or decoder_rnn_type == 'ESN':
 			esn_leak = checkpoint['esn_leak']
@@ -401,8 +393,8 @@ class Learner(object):
 		emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 
 		self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, bidirectional=bidirectional_encoder, hidden_dropout=encoder_hidden_dropout, esn_leak=esn_leak)
-		self.mixture_ratio_sampler = model.SampleFromDirichlet(num_clusters, self.encoder.hidden_size_total, mlp_hidden_size, relax_scalar=relax_scalar, prior_base_counts=prior_base_counts, posterior_base_counts=posterior_base_counts)
-		self.mixture_components = model.SampleFromIsotropicGaussianMixture(p_z_mean, p_z_sd, num_clusters=num_clusters, ndim=feature_size, post_mixture_noise=hierarchical_noise, post_mixture_noise_prior_sd=post_mixture_noise_prior_sd, mlp_input_size=self.encoder.hidden_size_total, mlp_hidden_size=mlp_hidden_size)
+		self.mixture_ratio_sampler = model.SampleFromDirichlet(num_clusters, self.encoder.hidden_size_total, mlp_hidden_size, relax_scalar=relax_scalar, posterior_base_counts=posterior_base_counts)
+		self.mixture_components = model.SampleFromIsotropicGaussianMixture(num_clusters=num_clusters, ndim=feature_size, post_mixture_noise=hierarchical_noise, mlp_input_size=self.encoder.hidden_size_total, mlp_hidden_size=mlp_hidden_size)
 		self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, esn_leak=esn_leak, bidirectional=bidirectional_decoder, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.mixture_ratio_sampler.load_state_dict(checkpoint['mixture_ratio_sampler'])
