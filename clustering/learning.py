@@ -448,7 +448,7 @@ def get_parameters():
 	par_parser.add_argument('--relax_scalar', type=float, default=0.01, help='Concentration of the Dirichlet distribution that relaxes the categorical assignments to the clusters.')
 	par_parser.add_argument('--prior_base_counts', type=float, default=[1.0], nargs='+', help='Base counts of the clusters for the prior (i.e., the parameters of the Dirichlet prior of the clusters).')
 	par_parser.add_argument('--posterior_base_counts', type=float, default=None, help='Base counts of the clusters for the posterior, which avoids underflow in the computation of Dirichlet gradients. Use 0.1 / num_clusters by default.')
-	par_parser.add_argument('-H', '--hierarchical_noise', action='store_true', help='If selected, assume the hierarhical Gaussian model adopted by Feldman et al. (2009), which adds an additional noise to the mixed features of each data point.')
+	par_parser.add_argument('-H', '--hierarchical_noise', action='store_true', help='If selected, assume an additional noise to the mixed features of each data point.')
 	par_parser.add_argument('-j', '--job_id', type=str, default='NO_JOB_ID', help='Job ID. For users of computing clusters.')
 	par_parser.add_argument('-s', '--seed', type=int, default=1111, help='random seed')
 	par_parser.add_argument('-d', '--device', type=str, default='cpu', help='Computing device.')

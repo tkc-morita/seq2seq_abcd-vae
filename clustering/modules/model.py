@@ -524,49 +524,49 @@ class SampleFromIsotropicGaussianMixture(torch.nn.Module):
 			post_mixture_noise_prior_sd = 1.0
 		if isinstance(post_mixture_noise_prior_sd, float):
 			post_mixture_noise_prior_sd = torch.ones(self.prior_sd.size(-1)) * post_mixture_noise_prior_sd
-		self.register_parameter('post_mixture_noise_prior_var', torch.nn.Parameter(post_mixture_noise_prior_sd.pow(2), requires_grad=False))
+		self.register_parameter('post_mixture_noise_prior_sd', torch.nn.Parameter(post_mixture_noise_prior_sd, requires_grad=False))
+		self.prior_distr_cluster_mean = torch.distributions.normal.Normal(self.prior_mean, self.prior_sd)
+		self.register_parameter(
+				'posterior_mean',
+				torch.nn.Parameter(
+					torch.randn_like(prior_mean)+self.prior_mean,
+					requires_grad=True)
+				)
+
+		self.register_parameter(
+				'posterior_log_var',
+				torch.nn.Parameter(
+					torch.randn_like(prior_sd.log()*2.0),
+					requires_grad=True)
+				)
 		if post_mixture_noise:
 			self.to_parameters = MLP_To_k_Vecs(mlp_input_size, mlp_hidden_size, self.prior_sd.size(-1), 2)
-		else:
-			self.prior_distr = torch.distributions.normal.Normal(self.prior_mean, self.prior_sd)
-			self.register_parameter(
-					'posterior_mean',
-					torch.nn.Parameter(
-						torch.randn_like(prior_mean)+self.prior_mean,
-						requires_grad=True)
-					)
-
-			self.register_parameter(
-					'posterior_log_var',
-					torch.nn.Parameter(
-						torch.randn_like(prior_sd.log()*2.0),
-						requires_grad=True)
-					)
 
 	def forward(self, cluster_weights, entire_data_size, parameter_seed=None):
 		# broadcast cluster_weights
 		cluster_weights = cluster_weights.view(cluster_weights.size()+(1,))
-		if self.post_mixture_noise: # Two-level Gaussian noise, one for each cluster, the other for post mixture.
-			# Sample values on mixture components from the posterior q(z | x) = N(posterior_mean, posterior_distr_sd).
-			posterior_mean, posterior_log_var = self.to_parameters(parameter_seed)
-			posterior_distr = torch.distributions.normal.Normal(posterior_mean, (0.5 * posterior_log_var).exp())
-			samples = posterior_distr.rsample()
 
-			# Get the prior distribution given the cluster_weights, p(z | cluster_weights).
-			prior_distr = torch.distributions.normal.Normal(
-				(self.prior_mean.view((1,)+self.prior_mean.size()) * cluster_weights).sum(1),
-				((self.prior_sd.view((1,)+self.prior_sd.size()) * cluster_weights).pow(2).sum(1) + self.post_mixture_noise_prior_var.view((1,)+self.post_mixture_noise_prior_var.size())).sqrt()
-			)
+		# Sample values on mixture components from q(cluster_mean) = N(posterior_mean, posterior_distr_sd).
+		posterior_distr_cluster_mean = torch.distributions.normal.Normal(self.posterior_mean, (0.5 * self.posterior_log_var).exp())
+		samples = posterior_distr_cluster_mean.rsample((cluster_weights.size(0),))
+		samples = (cluster_weights * samples).sum(1)
+
+		# Measure the KL divergence between q(cluster_mean) and p(cluster_mean).
+		kl_divergence = torch.distributions.kl_divergence(posterior_distr_cluster_mean, self.prior_distr_cluster_mean).sum() / entire_data_size
+
+		if self.post_mixture_noise: # Pre-decoder Gaussian noise to individual data points.
+			# Define q(z | x).
+			posterior_mean, posterior_log_var = self.to_parameters(parameter_seed)
+			posterior_distr_individual = torch.distributions.normal.Normal(posterior_mean, (0.5 * posterior_log_var).exp())
+
+			# Get the prior distribution given the cluster_weights, p(z | cluster_weights * cluster_means (= samples)).
+			prior_distr_individual = torch.distributions.normal.Normal(samples, self.post_mixture_noise_prior_sd)
 
 			# Measure the KL divergence between the posterior q(z | x) and the prior p(z | cluster_weights).
-			kl_divergence = torch.distributions.kl_divergence(posterior_distr, prior_distr).sum()
-		else: # The only noise is of each cluster's Gaussian.
-			# Sample values on mixture components from q(z) = N(posterior_mean, posterior_distr_sd).
-			posterior_distr = torch.distributions.normal.Normal(self.posterior_mean, (0.5 * self.posterior_log_var).exp())
-			samples = posterior_distr.rsample((cluster_weights.size(0),))
-			samples = (cluster_weights * samples).sum(1)
+			kl_divergence = torch.distributions.kl_divergence(posterior_distr_individual, prior_distr_individual).sum()
 
-			# Measure the KL divergence between q(z) and p(z).
-			kl_divergence = torch.distributions.kl_divergence(posterior_distr, self.prior_distr).sum() / entire_data_size
+			# Sample from q(z | x)
+			samples = posterior_distr_individual.rsample()
+		else: # The only noise is of each cluster's Gaussian.
 			posterior_mean, posterior_log_var = self.posterior_mean, self.posterior_log_var
 		return samples, kl_divergence, (posterior_mean, posterior_log_var)
