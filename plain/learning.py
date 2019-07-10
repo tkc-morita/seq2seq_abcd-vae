@@ -64,6 +64,7 @@ class Learner(object):
 			if torch.cuda.is_available():
 				if device.startswith('cuda'):
 					torch.cuda.manual_seed_all(seed)
+					logger.info('CUDA Version: {version}'.format(version=torch.version.cuda))
 				else:
 					print('CUDA is available. Restart with option -C or --cuda to activate it.')
 
