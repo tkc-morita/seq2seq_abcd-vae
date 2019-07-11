@@ -68,9 +68,9 @@ class Learner(object):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
 		if not self.retrieval:
 			torch.manual_seed(seed)
+			torch.cuda.manual_seed_all(seed) # According to the docs, "It’s safe to call this function if CUDA is not available; in that case, it is silently ignored."
 			if torch.cuda.is_available():
 				if device.startswith('cuda'):
-					torch.cuda.manual_seed_all(seed)
 					logger.info('CUDA Version: {version}'.format(version=torch.version.cuda))
 				else:
 					print('CUDA is available. Restart with option -C or --cuda to activate it.')
