@@ -69,6 +69,7 @@ class Learner(object):
 		if not self.retrieval:
 			torch.manual_seed(seed)
 			torch.cuda.manual_seed_all(seed) # According to the docs, "It’s safe to call this function if CUDA is not available; in that case, it is silently ignored."
+			torch.backends.cudnn.deterministic = True
 			if torch.cuda.is_available():
 				if device.startswith('cuda'):
 					logger.info('CUDA Version: {version}'.format(version=torch.version.cuda))
