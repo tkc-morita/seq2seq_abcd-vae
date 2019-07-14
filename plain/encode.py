@@ -13,7 +13,7 @@ class Encoder(learning.Learner):
 	def __init__(self, model_config_path, device = 'cpu'):
 		self.device = torch.device(device)
 		self.retrieve_model(checkpoint_path = model_config_path, device=device)
-		for param in itertools.chain(self.encoder.parameters(), self.decoder.parameters()):
+		for param in self.parameters():
 			param.requires_grad = False
 		self.encoder.to(self.device)
 		self.encoder.eval() # Turn off dropout

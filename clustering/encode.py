@@ -13,13 +13,12 @@ class Encoder(learning.Learner):
 	def __init__(self, model_config_path, device = 'cpu'):
 		self.device = torch.device(device)
 		self.retrieve_model(checkpoint_path = model_config_path, device=device)
-		for param in itertools.chain(self.encoder.parameters(), self.decoder.parameters()):
+		for param in self.parameters():
 			param.requires_grad = False
 		self.encoder.to(self.device)
 		self.encoder.eval() # Turn off dropout
 		self.decoder.to(self.device)
 		self.decoder.eval()
-
 
 	def encode(self, data, is_packed = False, to_numpy = True):
 		if not is_packed:
@@ -28,7 +27,7 @@ class Encoder(learning.Learner):
 			data = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(data)
 		with torch.no_grad():
 			data = data.to(self.device)
-			params = self.encoder(data)
+			last_hidden = self.encoder(data)
 		if to_numpy:
 			params = (p.data.cpu().numpy() for p in params)
 		return params
