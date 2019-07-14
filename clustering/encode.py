@@ -38,8 +38,8 @@ class Encoder(learning.Learner):
 		if parameter_ix2name is None:
 			parameter_ix2name = {}
 		dataloader = data_utils.DataLoader(dataset, batch_size=batch_size)
-		df_encoded = pd.DataFrame()
-		for data, _, ix_in_list in dataloader:
+		encoded = []
+		for data, _, _, ix_in_list in dataloader:
 			params = self.encode(data, is_packed=True, to_numpy=to_numpy)
 			for parameter_ix,p in enumerate(params):
 				if parameter_ix in parameter_ix2name:
@@ -47,12 +47,8 @@ class Encoder(learning.Learner):
 				else:
 					parameter_name = parameter_ix
 				for data_ix_in_batch,data_ix in enumerate(ix_in_list):
-					sub_df = pd.DataFrame()
-					sub_df['parameter_value'] = p[data_ix_in_batch,:] # num_batches x ndim
-					sub_df['data_ix'] = data_ix
-					sub_df['parameter_name'] = parameter_name
-					sub_df['feature_dim'] = sub_df.index
-					df_encoded = df_encoded.append(sub_df, ignore_index=True, sort=False)
+					encoded += [(data_ix,parameter_name,feature_dim,parameter_value) for feature_dim,parameter_value in enumerate(p[data_ix_in_batch,:])]
+		df_encoded = pd.DataFrame(encoded, columns=['data_ix','parameter_name','feature_dim','parameter_value'])
 		return df_encoded
 
 def get_parameters():
