@@ -505,7 +505,7 @@ class SampleFromDirichlet(torch.nn.Module):
 		p_kappa_given_pi = torch.distributions.dirichlet.Dirichlet(self.relax_scalar * pi)
 		kl_divergence += torch.distributions.kl_divergence(q_kappa_given_x, p_kappa_given_pi).sum()
 
-		return kappa, kl_divergence, q_kappa_given_x
+		return kappa, kl_divergence, q_kappa_weights
 
 
 class SampleFromIsotropicGaussianMixture(torch.nn.Module):
