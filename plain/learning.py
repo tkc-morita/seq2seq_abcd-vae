@@ -124,8 +124,6 @@ class Learner(object):
 				logger.info("Embedding dimension: {speaker_embed_dim}".format(speaker_embed_dim=speaker_embed_dim))
 			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters())
 
-		torch.backends.cudnn.deterministic = True
-
 		self.encoder.to(self.device)
 		self.decoder.to(self.device)
 
