@@ -66,15 +66,13 @@ class Learner(object):
 			speaker_embed_dim=None
 			):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
-		if not self.retrieval:
-			torch.manual_seed(seed)
-			torch.cuda.manual_seed_all(seed) # According to the docs, "It’s safe to call this function if CUDA is not available; in that case, it is silently ignored."
-			torch.backends.cudnn.deterministic = True
-			if torch.cuda.is_available():
-				if device.startswith('cuda'):
-					logger.info('CUDA Version: {version}'.format(version=torch.version.cuda))
-				else:
-					print('CUDA is available. Restart with option -C or --cuda to activate it.')
+		if torch.cuda.is_available():
+			if device.startswith('cuda'):
+				logger.info('CUDA Version: {version}'.format(version=torch.version.cuda))
+				if torch.backends.cudnn.enabled:
+					logger.info('cuDNN Version: {version}'.format(version=torch.backends.cudnn.version()))
+			else:
+				print('CUDA is available. Restart with option -C or --cuda to activate it.')
 
 		self.bce_with_logits_loss = torch.nn.BCEWithLogitsLoss(reduction='sum')
 
@@ -83,12 +81,15 @@ class Learner(object):
 		self.device = torch.device(device)
 		logger.info('Device: {device}'.format(device=device))
 
-		
+		torch.backends.cudnn.deterministic = True
+		torch.backends.cudnn.benchmark = False
 
 		if self.retrieval:
 			self.last_epoch = self.retrieve_model(device=device)
 			logger.info('Model retrieved.')
 		else:
+			torch.manual_seed(seed)
+			torch.cuda.manual_seed_all(seed) # According to the docs, "It’s safe to call this function if CUDA is not available; in that case, it is silently ignored."
 			self.emission_distribution =  emission_distribution
 			emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 			if encoder_hidden_dropout > 0.0 and encoder_rnn_layers==1:
