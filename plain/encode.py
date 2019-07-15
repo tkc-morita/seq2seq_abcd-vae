@@ -28,8 +28,6 @@ class Encoder(learning.Learner):
 			data = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(data)
 		with torch.no_grad():
 			data = data.to(self.device)
-			cluster_weights,kl_weight,_ = self.mixture_ratio_sampler(last_hidden, 1)
-			features,kl_value,_ = self.mixture_components(cluster_weights, 1, parameter_seed=last_hidden)
 			params = self.encoder(data)
 		if to_numpy:
 			params = (p.data.cpu().numpy() for p in params)

@@ -19,10 +19,7 @@ class Encoder(learning.Learner):
 		self.encoder.eval() # Turn off dropout
 		self.decoder.to(self.device)
 		self.decoder.eval()
-		self.mixture_ratio_sampler.to(self.device)
-		self.mixture_ratio_sampler.eval()
-		self.mixture_components.to(self.device)
-		self.mixture_components.eval()
+
 
 	def encode(self, data, is_packed = False, to_numpy = True):
 		if not is_packed:
@@ -32,27 +29,31 @@ class Encoder(learning.Learner):
 		with torch.no_grad():
 			data = data.to(self.device)
 			last_hidden = self.encoder(data)
+			_,_,cluster_weights = self.mixture_ratio_sampler(last_hidden, 1)
+			cluster_weights /= cluster_weights.sum(-1).view(cluster_weights.size()[:-1]+(1,))
+			_,_,(mean,log_var) = self.mixture_components(cluster_weights, 1, parameter_seed=last_hidden)
+			if mean.dim() == 3:
+				mean = (cluster_weights.view(cluster_weights.size()+(1,)) * mean).sum(1)
 		if to_numpy:
-			params = (p.data.cpu().numpy() for p in params)
-		return params
+			cluster_weights = cluster_weights.cpu().numpy()
+			mean = mean.data.cpu().numpy()
+		return cluster_weights, mean
 
 
-	def encode_dataset(self, dataset, to_numpy = True, parameter_ix2name=None, batch_size=1):
-		if parameter_ix2name is None:
-			parameter_ix2name = {}
+	def encode_dataset(self, dataset, to_numpy = True, batch_size=1):
 		dataloader = data_utils.DataLoader(dataset, batch_size=batch_size)
 		encoded = []
+		clustered = []
 		for data, _, _, ix_in_list in dataloader:
-			params = self.encode(data, is_packed=True, to_numpy=to_numpy)
-			for parameter_ix,p in enumerate(params):
-				if parameter_ix in parameter_ix2name:
-					parameter_name = parameter_ix2name[parameter_ix]
-				else:
-					parameter_name = parameter_ix
-				for data_ix_in_batch,data_ix in enumerate(ix_in_list):
-					encoded += [(data_ix,parameter_name,feature_dim,parameter_value) for feature_dim,parameter_value in enumerate(p[data_ix_in_batch,:])]
-		df_encoded = pd.DataFrame(encoded, columns=['data_ix','parameter_name','feature_dim','parameter_value'])
-		return df_encoded
+			cluster_weights, feature = self.encode(data, is_packed=True, to_numpy=to_numpy)
+			for data_ix_in_batch,data_ix in enumerate(ix_in_list):
+				encoded += [(data_ix,feature_dim,f_value)
+								for feature_dim,f_value in enumerate(feature[data_ix_in_batch,:])]
+				clustered += [(data_ix,cluster_ix,prob)
+								for cluster_ix,prob in enumerate(cluster_weights[data_ix_in_batch,:])]
+		df_encoded = pd.DataFrame(encoded, columns=['data_ix','feature_dim','feature_value'])
+		df_clustered = pd.DataFrame(clustered, columns=['data_ix','cluster_ix','prob'])
+		return df_clustered, df_encoded
 
 def get_parameters():
 	par_parser = argparse.ArgumentParser()
@@ -63,13 +64,12 @@ def get_parameters():
 	par_parser.add_argument('data_normalizer', type=float, help='Normalizing constant to devide the data.')
 	par_parser.add_argument('--annotation_sep', type=str, default=',', help='Separator symbol of the annotation file. Comma "," by default (i.e., csv).')
 	par_parser.add_argument('-d', '--device', type=str, default='cpu', help='Computing device.')
-	par_parser.add_argument('-S', '--save_path', type=str, default=None, help='Path to the file where results are saved.')
+	par_parser.add_argument('-S', '--save_dir', type=str, default=None, help='Path to the directory where results are saved.')
 	par_parser.add_argument('--fft_frame_length', type=float, default=0.008, help='FFT frame length in sec.')
 	par_parser.add_argument('--fft_step_size', type=float, default=0.004, help='FFT step size in sec.')
 	par_parser.add_argument('--fft_window_type', type=str, default='hann_window', help='Window type for FFT. "hann_window" by default.')
 	par_parser.add_argument('--fft_no_centering', action='store_true', help='If selected, no centering in FFT.')
 	par_parser.add_argument('--channel', type=int, default=0, help='Channel ID # (starting from 0) of multichannel recordings to use.')
-	par_parser.add_argument('-p', '--parameter_names', type=str, default=None, help='Comma-separated parameter names.')
 	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
 	par_parser.add_argument('-b', '--batch_size', type=int, default=1, help='Batch size.')
 
@@ -78,9 +78,11 @@ def get_parameters():
 if __name__ == '__main__':
 	parameters = get_parameters()
 
-	save_path = parameters.save_path
-	if save_path is None:
-		save_path = os.path.join(parameters.input_root, 'autoencoded.csv')
+	save_dir = parameters.save_dir
+	if save_dir is None:
+		save_dir = os.path.join(parameters.input_root, 'autoencoded')
+	if not os.path.isdir(save_dir):
+		os.makedirs(save_dir)
 
 	data_parser = data_utils.Data_Parser(parameters.input_root, parameters.annotation_file, annotation_sep=parameters.annotation_sep)
 	fs = data_parser.get_sample_freq() # Assuming all the wav files have the same fs, get the 1st file's.
@@ -97,13 +99,11 @@ if __name__ == '__main__':
 
 	dataset = data_parser.get_data(transform=Compose([to_tensor,stft,log_and_normalize]), channel=parameters.channel)
 
-	if parameters.parameter_names is None:
-		parameter_ix2name = {}
-	else:
-		parameter_ix2name = dict(enumerate(parameters.parameter_names.split(',')))
-	df_encoded = encoder.encode_dataset(dataset, parameter_ix2name=parameter_ix2name, batch_size=parameters.batch_size)
-	df_encoded = df_encoded.sort_values('data_ix')
+	df_clustered, df_encoded = encoder.encode_dataset(dataset, batch_size=parameters.batch_size)
+	df_encoded = df_encoded.sort_values(['data_ix','feature_dim'])
+	df_clustered = df_clustered.sort_values(['data_ix','cluster_ix'])
 	if 'label' in data_parser.df_annotation.columns:
 		df_encoded = df_encoded.merge(data_parser.df_annotation, how='left', left_on='data_ix', right_index=True)
-	df_encoded.to_csv(save_path, index=False)
-
+		df_clustered = df_clustered.merge(data_parser.df_annotation, how='left', left_on='data_ix', right_index=True)
+	df_encoded.to_csv(os.path.join(save_dir, 'feature.csv'), index=False)
+	df_clustered.to_csv(os.path.join(save_dir, 'clustering.csv'), index=False)
