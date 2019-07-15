@@ -19,6 +19,10 @@ class Encoder(learning.Learner):
 		self.encoder.eval() # Turn off dropout
 		self.decoder.to(self.device)
 		self.decoder.eval()
+		self.mixture_components.to(self.device)
+		self.mixture_components.eval()
+		self.mixture_ratio_sampler.to(self.device)
+		self.mixture_ratio_sampler.eval()
 
 
 	def encode(self, data, is_packed = False, to_numpy = True):
