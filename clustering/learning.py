@@ -342,10 +342,10 @@ class Learner(object):
 			'relax_scalar':self.mixture_ratio_sampler.relax_scalar,
 			'hierarchical_noise':self.mixture_components.post_mixture_noise,
 			'emission_distribution':self.emission_distribution,
-			'model_random_state':torch.get_rng_state(),
+			'random_state':torch.get_rng_state(),
 		}
 		if torch.cuda.is_available():
-			checkpoint['model_random_state_cuda'] = torch.cuda.get_rng_state_all()
+			checkpoint['random_state_cuda'] = torch.cuda.get_rng_state_all()
 		if checkpoint['encoder_rnn_type'] == 'ESN':
 			checkpoint['esn_leak'] = self.encoder.rnn.leak
 		elif checkpoint['decoder_rnn_type'] == 'ESN':
@@ -413,9 +413,9 @@ class Learner(object):
 
 		self.gradient_clip = checkpoint['gradient_clip']
 		
-		torch.set_rng_state(checkpoint['model_random_state'])
+		torch.set_rng_state(checkpoint['random_state'])
 		if device=='cuda':
-			torch.cuda.set_rng_state_all(checkpoint['model_random_state_cuda'])
+			torch.cuda.set_rng_state_all(checkpoint['random_state_cuda'])
 		return checkpoint['epoch']
 
 
