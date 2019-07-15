@@ -78,6 +78,9 @@ if __name__ == '__main__':
 	save_path = parameters.save_path
 	if save_path is None:
 		save_path = os.path.join(parameters.input_root, 'autoencoded.csv')
+	save_dir = os.path.dirname(save_path)
+	if not os.path.isdir(save_dir):
+		os.makedirs(save_dir)
 
 	data_parser = data_utils.Data_Parser(parameters.input_root, parameters.annotation_file, annotation_sep=parameters.annotation_sep)
 	fs = data_parser.get_sample_freq() # Assuming all the wav files have the same fs, get the 1st file's.
