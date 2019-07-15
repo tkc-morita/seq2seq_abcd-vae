@@ -99,7 +99,7 @@ if __name__ == '__main__':
 	else:
 		parameter_ix2name = dict(enumerate(parameters.parameter_names.split(',')))
 	df_encoded = encoder.encode_dataset(dataset, parameter_ix2name=parameter_ix2name, batch_size=parameters.batch_size)
-	df_encoded = df_encoded.sort_values('data_ix')
+	df_encoded = df_encoded.sort_values(['data_ix','parameter_name','feature_dim'])
 	if 'label' in data_parser.df_annotation.columns:
 		df_encoded = df_encoded.merge(data_parser.df_annotation, how='left', left_on='data_ix', right_index=True)
 	df_encoded.to_csv(save_path, index=False)
