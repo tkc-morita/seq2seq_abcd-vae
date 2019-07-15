@@ -1,7 +1,7 @@
 # encoding: utf-8
 
 import torch
-from torchvision.transforms import Compose
+from modules.data_utils import Compose
 import numpy as np
 import pandas as pd
 from modules import data_utils
