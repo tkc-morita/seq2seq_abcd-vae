@@ -1,7 +1,7 @@
 # coding: utf-8
 
 import torch
-from torchvision.transforms import Compose
+from modules.data_utils import Compose
 import numpy as np
 from modules import model, data_utils
 from logging import getLogger,FileHandler,DEBUG,Formatter
