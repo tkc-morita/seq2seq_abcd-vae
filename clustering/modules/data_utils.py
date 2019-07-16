@@ -66,8 +66,8 @@ class Dataset(torch.utils.data.Dataset):
 		self.df_annotation.loc[:, 'offset_ix'] = self.df_annotation.loc[:, 'offset_ix'].astype(int)
 		self.df_annotation.loc[:, 'length'] = self.df_annotation.loc[:, 'offset_ix'] - self.df_annotation.loc[:, 'onset_ix']
 
-	def sort_by_length(self):
-		return self.df_annotation.sort_values('length', ascending=False)
+	def sort_indices_by_length(self, ixs):
+		return self.df_annotation.iloc[ixs,:].sort_values('length', ascending=False).index
 
 	def __len__(self):
 		"""Return # of data strings."""
@@ -135,26 +135,23 @@ class Compose(object):
 class DataLoader(object):
 	def __init__(self, dataset, batch_size=1, shuffle=False):
 		self.dataset = dataset
-		self.split_into_batches(batch_size)
 		self.shuffle = shuffle
+		if shuffle:
+			sampler = torch.utils.data.RandomSampler(self.dataset, replacement=False)
+		else:
+			sampler = torch.utils.data.SequentialSampler(self.dataset)
+		self.batch_sampler = torch.utils.data.BatchSampler(sampler, batch_size, drop_last=False)
 
-	def split_into_batches(self,batch_size):
-		df_sorted = self.dataset.sort_by_length()
-		datasize = len(self.dataset)
-		self.batches = [df_sorted.index[batch_start:min(batch_start+batch_size, datasize)] for batch_start in range(0,datasize,batch_size)]
 
 	def __iter__(self):
-		if self.shuffle:
-			self.batch_order = torch.randperm(len(self.batches)).tolist()
-		else:
-			self.batch_order = torch.arange(len(self.batches)).tolist()
+		self.batches = list(self.batch_sampler)
 		return self
 
 	def __next__(self):
-		if not self.batch_order:
+		if not self.batches:
 			raise StopIteration
-		batch_ix = self.batch_order.pop()
-		ixs = self.batches[batch_ix]
+		ixs = self.batches.pop()
+		ixs = self.dataset.sort_indices_by_length(ixs)
 		batched_input = []
 		speakers = []
 		is_offset = []
@@ -170,4 +167,4 @@ class DataLoader(object):
 		return batched_input, is_offset, speakers, ixs
 
 	def get_num_batches(self):
-		return len(self.batches)
+		return len(self.batch_sampler)
