@@ -162,7 +162,7 @@ class Learner(object):
 			end_prediction_loss_per_batch = torch.stack(end_prediction_loss_per_batch).logsumexp(dim=0)
 			kl_loss_per_batch = self.kl_func(*feature_params)
 			loss = emission_loss_per_batch + end_prediction_loss_per_batch + kl_loss_per_batch
-			loss.backward()
+			(loss / packed_input.batch_sizes[0]).backward()
 
 			# `clip_grad_norm` helps prevent the exploding gradient problem in RNNs.
 			torch.nn.utils.clip_grad_norm_(self.parameters(), self.gradient_clip)
