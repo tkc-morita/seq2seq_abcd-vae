@@ -469,17 +469,17 @@ class SampleFromDirichlet(torch.nn.Module):
 		self.num_clusters = num_clusters
 		self.relax_scalar = relax_scalar
 
+
+		if isinstance(prior_base_counts, float):
+			prior_base_counts = torch.full((num_clusters,), prior_base_counts, requires_grad=False)
+		self.register_parameter('prior_base_counts', torch.nn.Parameter(prior_base_counts, requires_grad=False))
+		self.p_pi = torch.distributions.dirichlet.Dirichlet(self.prior_base_counts)
 		self.register_parameter(
 				'q_pi_weights',
 				torch.nn.Parameter(
-					torch.randn(num_clusters),
+					self.prior_base_counts.clone().detach(),
 					requires_grad=True)
 				)
-
-		if isinstance(prior_base_counts, float):
-			prior_base_counts = torch.ones_like(self.q_pi_weights, requires_grad=False)
-		self.register_parameter('prior_base_counts', torch.nn.Parameter(prior_base_counts, requires_grad=False))
-		self.p_pi = torch.distributions.dirichlet.Dirichlet(self.prior_base_counts)
 		self.to_q_kappa_weights = MLP(mlp_input_size, mlp_hidden_size, num_clusters)
 		if posterior_base_counts is None:
 			posterior_base_counts = 0.1 / num_clusters
@@ -494,7 +494,7 @@ class SampleFromDirichlet(torch.nn.Module):
 		kappa = q_kappa_given_x.rsample()
 
 		# Sample a shape pi of the Dirichlet prior p(kappa | pi) from q(pi) = Dirichlet(self.q_pi_weights)
-		q_pi = torch.distributions.dirichlet.Dirichlet(self.to_non_negative(self.q_pi_weights, 1.0))
+		q_pi = torch.distributions.dirichlet.Dirichlet(self.to_non_negative(self.q_pi_weights, self.prior_base_counts))
 		pi = q_pi.rsample(sample_shape=(kappa.size(0),))
 
 		# Compute the KL divergence between q(pi) and p(pi).
@@ -512,30 +512,29 @@ class SampleFromIsotropicGaussianMixture(torch.nn.Module):
 		super(SampleFromIsotropicGaussianMixture, self).__init__()
 		if isinstance(prior_mean,float):
 			assert not (ndim is None or num_clusters is None), 'num_clusters and ndim must be specified when prior_mean is a scalar.'
-			prior_mean = torch.ones((num_clusters, ndim)) * prior_mean
+			prior_mean = torch.full((num_clusters, ndim), prior_mean)
 		if isinstance(prior_sd,float):
-			assert not (ndim is None or num_clusters is None), 'num_clusters and ndim must be specified when prior_mean is a scalar.'
-			prior_sd = torch.ones((num_clusters, ndim)) * prior_mean
+			prior_sd = torch.full_like(prior_mean, prior_sd)
 		self.register_parameter('prior_mean', torch.nn.Parameter(prior_mean, requires_grad=False))
 		self.register_parameter('prior_sd', torch.nn.Parameter(prior_sd, requires_grad=False))
 		self.post_mixture_noise = post_mixture_noise
 		if post_mixture_noise_prior_sd is None:
 			post_mixture_noise_prior_sd = 1.0
 		if isinstance(post_mixture_noise_prior_sd, float):
-			post_mixture_noise_prior_sd = torch.ones(self.prior_sd.size(-1)) * post_mixture_noise_prior_sd
+			post_mixture_noise_prior_sd = torch.full((self.prior_sd.size(-1),), post_mixture_noise_prior_sd)
 		self.register_parameter('post_mixture_noise_prior_sd', torch.nn.Parameter(post_mixture_noise_prior_sd, requires_grad=False))
 		self.prior_distr_cluster_mean = torch.distributions.normal.Normal(self.prior_mean, self.prior_sd)
 		self.register_parameter(
 				'posterior_mean',
 				torch.nn.Parameter(
-					torch.randn_like(prior_mean)+self.prior_mean,
+					self.prior_mean.clone().detach(),
 					requires_grad=True)
 				)
 
 		self.register_parameter(
 				'posterior_log_var',
 				torch.nn.Parameter(
-					torch.randn_like(prior_sd.log()*2.0),
+					self.prior_sd.clone().detach().log()*2.0,
 					requires_grad=True)
 				)
 		if post_mixture_noise:
