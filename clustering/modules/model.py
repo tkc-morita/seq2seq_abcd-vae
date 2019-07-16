@@ -484,18 +484,17 @@ class SampleFromDirichlet(torch.nn.Module):
 		if posterior_base_counts is None:
 			posterior_base_counts = 0.1 / num_clusters
 		self.posterior_base_counts = posterior_base_counts
-		self.to_non_negative = (lambda x: torch.nn.ELU()(x) + 1.0 + posterior_base_counts)
+		self.to_non_negative = lambda x, floor: torch.nn.ELU()(x) + 1.0 + floor
 
 
 	def forward(self, weights_seed, entire_data_size):
 		# Sample a relaxed category assignment kappa from q(kappa | x) = Dirichlet(q_kappa_weights).
-		q_kappa_weights = self.to_non_negative(self.to_q_kappa_weights(weights_seed))
+		q_kappa_weights = self.to_non_negative(self.to_q_kappa_weights(weights_seed), self.posterior_base_counts)
 		q_kappa_given_x = torch.distributions.dirichlet.Dirichlet(q_kappa_weights)
 		kappa = q_kappa_given_x.rsample()
-		# print(q_kappa_weights[0].min(), q_kappa_weights[0].median(), q_kappa_weights[0].max())
 
 		# Sample a shape pi of the Dirichlet prior p(kappa | pi) from q(pi) = Dirichlet(self.q_pi_weights)
-		q_pi = torch.distributions.dirichlet.Dirichlet(self.to_non_negative(self.q_pi_weights))
+		q_pi = torch.distributions.dirichlet.Dirichlet(self.to_non_negative(self.q_pi_weights, 1.0))
 		pi = q_pi.rsample(sample_shape=(kappa.size(0),))
 
 		# Compute the KL divergence between q(pi) and p(pi).
