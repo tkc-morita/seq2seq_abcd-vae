@@ -149,12 +149,10 @@ class Learner(object):
 				logger.info("Speaker ID # is embedded and fed to the decoder.")
 				logger.info("# of speakers: {num_speakers}".format(num_speakers=num_speakers))
 				logger.info("Embedding dimension: {speaker_embed_dim}".format(speaker_embed_dim=speaker_embed_dim))
-
-
-		self.encoder.to(self.device)
-		self.mixture_ratio_sampler.to(self.device)
-		self.mixture_components.to(self.device)
-		self.decoder.to(self.device)
+			self.encoder.to(self.device)
+			self.mixture_ratio_sampler.to(self.device)
+			self.mixture_components.to(self.device)
+			self.decoder.to(self.device)
 		
 
 
@@ -404,6 +402,10 @@ class Learner(object):
 		self.mixture_ratio_sampler.load_state_dict(checkpoint['mixture_ratio_sampler'])
 		self.mixture_components.load_state_dict(checkpoint['mixture_components'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
+		self.encoder.to(self.device)
+		self.mixture_ratio_sampler.to(self.device)
+		self.mixture_components.to(self.device)
+		self.decoder.to(self.device)
 		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.mixture_ratio_sampler.parameters(), self.mixture_components.parameters(), self.decoder.parameters())
 
 		self.optimizer = torch.optim.SGD(self.parameters(), lr=0.1)

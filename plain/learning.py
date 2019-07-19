@@ -124,8 +124,8 @@ class Learner(object):
 				logger.info("Embedding dimension: {speaker_embed_dim}".format(speaker_embed_dim=speaker_embed_dim))
 			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters())
 
-		self.encoder.to(self.device)
-		self.decoder.to(self.device)
+			self.encoder.to(self.device)
+			self.decoder.to(self.device)
 
 
 
@@ -363,6 +363,8 @@ class Learner(object):
 		self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, esn_leak=esn_leak, bidirectional=bidirectional_decoder, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
+		self.encoder.to(self.device)
+		self.decoder.to(self.device)
 
 
 		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters())
