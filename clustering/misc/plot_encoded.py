@@ -70,13 +70,13 @@ def heatmap(df, save_dir=None):
 		# df_pivot += sub_df.pivot(index='label', columns='cluster_ix', values='prob')
 		# data_size += 1
 	# df_pivot /= data_size
-	print(df.loc[df.groupby('data_ix').prob.idxmax(),:].groupby('label').cluster_ix.value_counts())
-	# df_pivot = df.groupby(['label','cluster_ix']).prob.mean().to_frame().reset_index().pivot(index='label', columns='cluster_ix', values='prob')
-	# sns.heatmap(df_pivot)
-	# if save_dir is None:
-	# 	plt.show()
-	# else:
-	# 	plt.savefig(os.path.join(save_dir, 'heatmap.png'), bbox_inches="tight")
+	# print(df.loc[df.groupby('data_ix').prob.idxmax(),:].groupby('label').cluster_ix.value_counts())
+	df_pivot = df.groupby(['label','cluster_ix']).prob.mean().to_frame().reset_index().pivot(index='label', columns='cluster_ix', values='prob')
+	sns.heatmap(df_pivot)
+	if save_dir is None:
+		plt.show()
+	else:
+		plt.savefig(os.path.join(save_dir, 'heatmap.png'), bbox_inches="tight")
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser()
@@ -98,11 +98,12 @@ if __name__ == "__main__":
 
 	if (not args.save_dir is None) and (not os.path.isdir(args.save_dir)):
 		os.makedirs(args.save_dir)
-	# plot_features(df)
-	for path,sub_df in df.groupby('input_path'):
-		if args.save_dir is None:
-			save_path = None
-		else:
-			save_path = os.path.join(args.save_dir, os.path.splitext(path)[0] + '.png')
-		tsne(sub_df, title=path, save_path=save_path)
-	# heatmap(df, save_dir=args.save_dir)
+	if 'feature_value' in df.columns:
+		for path,sub_df in df.groupby('input_path'):
+			if args.save_dir is None:
+				save_path = None
+			else:
+				save_path = os.path.join(args.save_dir, os.path.splitext(path)[0] + '.png')
+			tsne(sub_df, title=path, save_path=save_path)
+	else:
+		heatmap(df, save_dir=args.save_dir)
