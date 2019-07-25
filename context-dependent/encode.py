@@ -16,7 +16,6 @@ class Encoder(learning.Learner):
 		for param in self.parameters():
 			param.requires_grad = False
 		self.encoder.eval() # Turn off dropout
-		self.feature_sampler.eval()
 		self.decoder.eval()
 
 
@@ -27,8 +26,7 @@ class Encoder(learning.Learner):
 			data = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(data)
 		with torch.no_grad():
 			data = data.to(self.device)
-			last_hidden = self.encoder(data)
-			params = self.feature_sampler(last_hidden)
+			params = self.encoder(data)
 		if to_numpy:
 			params = (p.data.cpu().numpy() for p in params)
 		return params

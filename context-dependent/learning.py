@@ -40,7 +40,6 @@ class Learner(object):
 			decoder_rnn_hidden_size,
 			mlp_hidden_size,
 			feature_size,
-			num_clusters,
 			save_dir,
 			encoder_rnn_type='LSTM',
 			decoder_rnn_type='LSTM',
@@ -52,16 +51,10 @@ class Learner(object):
 			decoder_input_dropout = 0.0,
 			device=False,
 			seed=1111,
+			feature_distribution='isotropic_gaussian',
 			emission_distribution='isotropic_gaussian',
 			decoder_self_feedback=True,
 			esn_leak=1.0,
-			relax_scalar=0.05,
-			prior_base_counts = 1.0,
-			p_z_mean = None,
-			p_z_sd = 1.0,
-			hierarchical_noise=False,
-			post_mixture_noise_prior_sd=1.0,
-			posterior_base_counts=None,
 			num_speakers=None,
 			speaker_embed_dim=None
 			):
@@ -73,6 +66,8 @@ class Learner(object):
 					logger.info('cuDNN Version: {version}'.format(version=torch.backends.cudnn.version()))
 			else:
 				print('CUDA is available. Restart with option -C or --cuda to activate it.')
+
+		self.bce_with_logits_loss = torch.nn.BCEWithLogitsLoss(reduction='sum')
 
 		self.save_dir = save_dir
 
@@ -88,36 +83,18 @@ class Learner(object):
 		else:
 			torch.manual_seed(seed)
 			torch.cuda.manual_seed_all(seed) # According to the docs, "It’s safe to call this function if CUDA is not available; in that case, it is silently ignored."
+			self.feature_distribution = feature_distribution
+			self.emission_distribution =  emission_distribution
+			self.feature_sampler, _, self.kl_func = model.choose_distribution(feature_distribution)
+			emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 			if encoder_hidden_dropout > 0.0 and encoder_rnn_layers==1:
 				logger.warning('Non-zero dropout cannot be used for the single-layer encoder RNN (because there is no non-top hidden layers).')
 				logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
 				encoder_hidden_dropout = 0.0
-			if p_z_mean is None:
-				num_cat_bit_length = num_clusters.bit_length() - 1
-				logger.info('# of categories is changed from {num_clusters} to 2**{num_cat_bit_length}.'.format(num_clusters=num_clusters, num_cat_bit_length=num_cat_bit_length))
-				logger.info('feature_size is changed from {feature_size} to {num_cat_bit_length}'.format(feature_size=feature_size, num_cat_bit_length=num_cat_bit_length))
-				num_clusters = 2**num_cat_bit_length
-				feature_size = num_cat_bit_length
-				p_z_mean = torch.tensor(list(itertools.product((-2.0,2.0), repeat=feature_size)))
-				logger.info('The means of the mixture components are in {{-2.0, 2.0}}^{feature_size}'.format(feature_size=feature_size))
-				p_z_sd = torch.ones_like(p_z_mean)
-				logger.info('The standard deviation of the mixture components is 1.0 for all the dimensions.'.format(feature_size=feature_size))
-			self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
-			self.mixture_ratio_sampler = model.SampleFromDirichlet(num_clusters, self.encoder.hidden_size_total, mlp_hidden_size, relax_scalar=relax_scalar, prior_base_counts = prior_base_counts, posterior_base_counts=posterior_base_counts)
-			self.mixture_components = model.SampleFromIsotropicGaussianMixture(p_z_mean, p_z_sd, num_clusters=num_clusters, ndim=feature_size, post_mixture_noise=hierarchical_noise, post_mixture_noise_prior_sd=post_mixture_noise_prior_sd, mlp_input_size=self.encoder.hidden_size_total, mlp_hidden_size=mlp_hidden_size)
-			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_distr_name=emission_distribution, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder, right2left_weight=right2left_decoder_weight, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
-			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.mixture_ratio_sampler.parameters(), self.mixture_components.parameters(), self.decoder.parameters())
+			self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
+			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
 			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
-			logger.info('Features are assumed to be distributed according to mixture of isotropic Gaussians.')
-			logger.info("# of mixture components: {num_clusters}".format(num_clusters=num_clusters))
-			logger.info("Prior distribution of the mixture ratio, pi, is Dirichlet({prior_base_counts}).".format(prior_base_counts=prior_base_counts))
-			logger.info("Assignments to the mixture components are continuously relaxed by samples from Drichlet({relax_scalar} * pi)".format(relax_scalar=relax_scalar))
-			if posterior_base_counts is None:
-				posterior_base_counts = '0.1 / {num_clusters}'.format(num_clusters=num_clusters)
-			logger.info("To avoid underflow, the approximated Dirichlet posterior of the relaxed assignments has the base count: {posterior_base_counts}".format(posterior_base_counts=posterior_base_counts))
-			if hierarchical_noise:
-				logger.info('Another level of noise is added to the mixed features in prior according to the standard multivariate Gaussian N(0, {post_mixture_noise_prior_sd}*I).'.format(post_mixture_noise_prior_sd=post_mixture_noise_prior_sd))
-				logger.info('Posterior on the individual feature distribution is approximated by an isotropic Gaussian.')
+			logger.info('Features are assumed to be distributed according to {feature_distribution}.'.format(feature_distribution=feature_distribution))
 			logger.info('Conditioned on the features, data are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
 			logger.info('Random seed: {seed}'.format(seed = seed))
 			logger.info('Type of RNN used for the encoder: {rnn_type}'.format(rnn_type=encoder_rnn_type))
@@ -130,6 +107,11 @@ class Learner(object):
 			logger.info("Decoder is bidirectional: {bidirectional_decoder}".format(bidirectional_decoder=bidirectional_decoder))
 			if bidirectional_decoder:
 				logger.info("Probability of emission by the right-to-left decoder: {p}".format(p=right2left_decoder_weight))
+				self.log_left2right_decoder_weight = torch.tensor(1 - right2left_decoder_weight).log().item()
+				self.log_right2left_decoder_weight = torch.tensor(right2left_decoder_weight).log().item()
+			else:
+				self.log_left2right_decoder_weight = 0.0
+				self.log_right2left_decoder_weight = None
 			logger.info("Dropout rate in the non-top layers of the encoder RNN: {do}".format(do=encoder_hidden_dropout))
 			logger.info("Self-feedback to the decoder: {decoder_self_feedback}".format(decoder_self_feedback=decoder_self_feedback))
 			if decoder_self_feedback:
@@ -140,11 +122,10 @@ class Learner(object):
 				logger.info("Speaker ID # is embedded and fed to the decoder.")
 				logger.info("# of speakers: {num_speakers}".format(num_speakers=num_speakers))
 				logger.info("Embedding dimension: {speaker_embed_dim}".format(speaker_embed_dim=speaker_embed_dim))
+			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters())
+
 			self.encoder.to(self.device)
-			self.mixture_ratio_sampler.to(self.device)
-			self.mixture_components.to(self.device)
 			self.decoder.to(self.device)
-		
 
 
 
@@ -154,16 +135,14 @@ class Learner(object):
 		Training phase. Updates weights.
 		"""
 		self.encoder.train() # Turn on training mode which enables dropout.
-		self.mixture_ratio_sampler.train()
-		self.mixture_components.train()
 		self.decoder.train()
+		self.bce_with_logits_loss.train()
 
 		emission_loss = 0
 		end_prediction_loss = 0
 		kl_loss = 0
 
 		num_batches = dataloader.get_num_batches()
-		num_strings = len(dataloader.dataset)
 
 		for batch_ix,(packed_input, is_offset, speaker, _) in enumerate(dataloader, 1):
 			packed_input = packed_input.to(self.device)
@@ -172,12 +151,16 @@ class Learner(object):
 
 			self.optimizer.zero_grad()
 
-			last_hidden = self.encoder(packed_input)
-			cluster_weights,kl_weight,_ = self.mixture_ratio_sampler(last_hidden, num_strings)
-			features,kl_value,_ = self.mixture_components(cluster_weights, num_strings, parameter_seed=last_hidden)
-			kl_loss_per_batch = kl_weight + kl_value
-			emission_loss_per_batch, end_prediction_loss_per_batch, _, _, _ = self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker, ground_truth_out=packed_input.data, ground_truth_offset=is_offset.data)
-
+			feature_params = self.encoder(packed_input)
+			features = self.feature_sampler(*feature_params)
+			emission_loss_per_batch = []
+			end_prediction_loss_per_batch = []
+			for (emission_params,flatten_offset_prediction,_), log_loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker), (self.log_left2right_decoder_weight, self.log_right2left_decoder_weight)):
+				emission_loss_per_batch += [-self.log_pdf_emission(packed_input.data, *emission_params) + log_loss_weight]
+				end_prediction_loss_per_batch += [self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data) + log_loss_weight]
+			emission_loss_per_batch = torch.stack(emission_loss_per_batch).logsumexp(dim=0)
+			end_prediction_loss_per_batch = torch.stack(end_prediction_loss_per_batch).logsumexp(dim=0)
+			kl_loss_per_batch = self.kl_func(*feature_params)
 			loss = emission_loss_per_batch + end_prediction_loss_per_batch + kl_loss_per_batch
 			loss /= packed_input.batch_sizes[0]
 			loss.backward()
@@ -193,6 +176,7 @@ class Learner(object):
 
 			logger.info('{batch_ix}/{num_batches} training batches complete. mean loss: {loss:5.4f}'.format(batch_ix=batch_ix, num_batches=num_batches, loss=loss.item()))
 
+		num_strings = len(dataloader.dataset)
 		emission_loss /= num_strings
 		end_prediction_loss /= num_strings
 		kl_loss /= num_strings
@@ -203,14 +187,13 @@ class Learner(object):
 		logger.info('mean training total loss (per string): {:5.4f}'.format(mean_loss))
 
 
-	def test_or_validate(self, dataloader, train_data_size):
+	def test_or_validate(self, dataloader):
 		"""
 		Test/validation phase. No update of weights.
 		"""
 		self.encoder.eval() # Turn on evaluation mode which disables dropout.
-		self.mixture_ratio_sampler.eval()
-		self.mixture_components.eval()
 		self.decoder.eval()
+		self.bce_with_logits_loss.eval()
 
 		emission_loss = 0
 		end_prediction_loss = 0
@@ -225,13 +208,16 @@ class Learner(object):
 				is_offset = is_offset.to(self.device)
 				speaker = speaker.to(self.device)
 
-				last_hidden = self.encoder(packed_input)
-				cluster_weights,kl_weight,_ = self.mixture_ratio_sampler(last_hidden, train_data_size)
-				features,kl_value,_ = self.mixture_components(cluster_weights, train_data_size, parameter_seed=last_hidden)
-				kl_loss += kl_weight + kl_value
-				emission_loss_per_batch, end_prediction_loss_per_batch, _, _, _ = self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker, ground_truth_out=packed_input.data, ground_truth_offset=is_offset.data)
-				emission_loss += emission_loss_per_batch.item()
-				end_prediction_loss += end_prediction_loss_per_batch.item()
+				feature_params = self.encoder(packed_input)
+				features = self.feature_sampler(*feature_params)
+				emission_loss_per_batch = []
+				end_prediction_loss_per_batch = []
+				for (emission_params,flatten_offset_prediction,_), log_loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker), (self.log_left2right_decoder_weight, self.log_right2left_decoder_weight)):
+					emission_loss_per_batch += [-self.log_pdf_emission(packed_input.data, *emission_params) + log_loss_weight]
+					end_prediction_loss_per_batch += [self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data) + log_loss_weight]
+				emission_loss += torch.stack(emission_loss_per_batch).logsumexp(dim=0).item()
+				end_prediction_loss += torch.stack(end_prediction_loss_per_batch).logsumexp(dim=0).item()
+				kl_loss += self.kl_func(*feature_params).item()
 
 				logger.info('{batch_ix}/{num_batches} validation batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
 
@@ -277,7 +263,7 @@ class Learner(object):
 			logger.info('end of TRAINING phase.')
 
 			logger.info('start of VALIDATION phase.')
-			mean_valid_loss = self.test_or_validate(valid_dataloader, len(train_dataloader.dataset))
+			mean_valid_loss = self.test_or_validate(valid_dataloader)
 			logger.info('end of VALIDATION phase.')
 
 			self.lr_scheduler.step(mean_valid_loss)
@@ -295,20 +281,37 @@ class Learner(object):
 		checkpoint = {
 			'epoch':epoch,
 			'encoder':self.encoder.state_dict(),
-			'encoder_init_parameters':self.encoder.pack_init_parameters(),
 			'decoder':self.decoder.state_dict(),
-			'decoder_init_parameters':self.decoder.pack_init_parameters(),
-			'mixture_ratio_sampler':self.mixture_ratio_sampler.state_dict(),
-			'mixture_ratio_sampler_init_parameters':self.mixture_ratio_sampler.pack_init_parameters(),
-			'mixture_components':self.mixture_components.state_dict(),
-			'mixture_components_init_parameters':self.mixture_components.pack_init_parameters(),
 			'optimizer':self.optimizer.state_dict(),
 			'lr_scheduler':self.lr_scheduler.state_dict(),
 			'gradient_clip':self.gradient_clip,
+			'input_size':self.encoder.rnn.input_size,
+			'encoder_rnn_type':self.encoder.rnn.mode.split('_')[0],
+			'decoder_rnn_type':self.decoder.rnn_cell.mode,
+			'encoder_rnn_hidden_size':self.encoder.rnn.hidden_size,
+			'decoder_rnn_hidden_size':self.decoder.rnn_cell.cell.hidden_size,
+			'encoder_rnn_layers':self.encoder.rnn.num_layers,
+			'bidirectional_encoder':self.encoder.rnn.bidirectional,
+			'bidirectional_decoder':self.decoder.bidirectional,
+			'log_left2right_decoder_weight':self.log_left2right_decoder_weight,
+			'log_right2left_decoder_weight':self.log_right2left_decoder_weight,
+			'encoder_hidden_dropout':self.encoder.rnn.dropout,
+			'decoder_input_dropout':self.decoder.rnn_cell.drop.p,
+			'mlp_hidden_size':self.encoder.to_parameters.mlps[0].hidden_size,
+			'feature_size':self.decoder.feature_size,
+			'feature_distribution':self.feature_distribution,
+			'emission_distribution':self.emission_distribution,
 			'random_state':torch.get_rng_state(),
 		}
 		if torch.cuda.is_available():
 			checkpoint['random_state_cuda'] = torch.cuda.get_rng_state_all()
+		if checkpoint['encoder_rnn_type'] == 'ESN':
+			checkpoint['esn_leak'] = self.encoder.rnn.leak
+		elif checkpoint['decoder_rnn_type'] == 'ESN':
+			checkpoint['esn_leak'] = self.decoder.rnn_cell.cell.leak
+		if not self.decoder.embed_speaker is None:
+			checkpoint['num_speakers'] = self.decoder.embed_speaker.num_embeddings
+			checkpoint['speaker_embed_dim'] = self.decoder.embed_speaker.embedding_dim
 		torch.save(checkpoint, os.path.join(self.save_dir, 'checkpoint.pt'))
 		logger.info('Config successfully saved.')
 
@@ -318,21 +321,53 @@ class Learner(object):
 			checkpoint_path = os.path.join(self.save_dir, 'checkpoint.pt')
 		checkpoint = torch.load(checkpoint_path, map_location='cpu') # Random state needs to be loaded to CPU first even when cuda is available.
 
+		input_size = checkpoint['input_size']
+		encoder_rnn_type = checkpoint['encoder_rnn_type']
+		decoder_rnn_type = checkpoint['decoder_rnn_type']
+		encoder_rnn_hidden_size = checkpoint['encoder_rnn_hidden_size']
+		decoder_rnn_hidden_size = checkpoint['decoder_rnn_hidden_size']
+		encoder_rnn_layers = checkpoint['encoder_rnn_layers']
+		bidirectional_encoder = checkpoint['bidirectional_encoder']
+		if 'bidirectional_decoder' in checkpoint:
+			bidirectional_decoder = checkpoint['bidirectional_decoder']
+		else:
+			bidirectional_decoder = False
+		if 'log_left2right_decoder_weight' in checkpoint:
+			self.log_left2right_decoder_weight = checkpoint['log_left2right_decoder_weight']
+			self.log_right2left_decoder_weight = checkpoint['log_right2left_decoder_weight']
+		else:
+			self.log_left2right_decoder_weight = 0.0
+			self.log_right2left_decoder_weight = None
+		encoder_hidden_dropout = checkpoint['encoder_hidden_dropout']
+		decoder_input_dropout = checkpoint['decoder_input_dropout']
+		feature_size = checkpoint['feature_size']
+		mlp_hidden_size = checkpoint['mlp_hidden_size']
 
-		self.encoder = model.RNN_Variational_Encoder(**checkpoint['encoder_init_parameters'])
-		self.mixture_ratio_sampler = model.SampleFromDirichlet(**checkpoint['mixture_ratio_sampler_init_parameters'])
-		self.mixture_components = model.SampleFromIsotropicGaussianMixture(**checkpoint['mixture_components_init_parameters'])
-		self.decoder = model.RNN_Variational_Decoder(**checkpoint['decoder_init_parameters'])
+		if encoder_rnn_type == 'ESN' or decoder_rnn_type == 'ESN':
+			esn_leak = checkpoint['esn_leak']
+		else:
+			esn_leak = 1.0
+		if 'num_speakers' in checkpoint:
+			num_speakers = checkpoint['num_speakers']
+			speaker_embed_dim = checkpoint['speaker_embed_dim']
+		else:
+			num_speakers = None
+			speaker_embed_dim = None
+
+		self.feature_distribution = checkpoint['feature_distribution']
+		self.emission_distribution = checkpoint['emission_distribution']
+		self.feature_sampler,_,self.kl_func = model.choose_distribution(self.feature_distribution)
+		emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
+
+		self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, bidirectional=bidirectional_encoder, hidden_dropout=encoder_hidden_dropout, esn_leak=esn_leak)
+		self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, esn_leak=esn_leak, bidirectional=bidirectional_decoder, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
 		self.encoder.load_state_dict(checkpoint['encoder'])
-		self.mixture_ratio_sampler.load_state_dict(checkpoint['mixture_ratio_sampler'])
-		self.mixture_components.load_state_dict(checkpoint['mixture_components'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
 		self.encoder.to(self.device)
-		self.mixture_ratio_sampler.to(self.device)
-		self.mixture_components.to(self.device)
 		self.decoder.to(self.device)
-		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.mixture_ratio_sampler.parameters(), self.mixture_components.parameters(), self.decoder.parameters())
 
+
+		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters())
 		self.optimizer = torch.optim.SGD(self.parameters(), lr=0.1)
 		self.optimizer.load_state_dict(checkpoint['optimizer'])
 
@@ -381,11 +416,6 @@ def get_parameters():
 	par_parser.add_argument('--esn_leak', type=float, default=1.0, help='Leak for the echo-state network. Ignored if the RNN type is not ESN.')
 	par_parser.add_argument('--bidirectional_decoder', action='store_true', help='If selected, use the weighted sum of losses from left-to-right and right-to-left decoders (to avoid the uninformative latent variable problem).')
 	par_parser.add_argument('--right2left_decoder_weight', type=float, default=0.5, help='The weight of the right-to-left decoder when bidirectional_decoder==True.')
-	par_parser.add_argument('-C', '--num_clusters', type=int, default=64, help='Max # of clusters. Currently floored to a power of 2.')
-	par_parser.add_argument('--relax_scalar', type=float, default=0.01, help='Concentration of the Dirichlet distribution that relaxes the categorical assignments to the clusters.')
-	par_parser.add_argument('--prior_base_counts', type=float, default=[1.0], nargs='+', help='Base counts of the clusters for the prior (i.e., the parameters of the Dirichlet prior of the clusters).')
-	par_parser.add_argument('--posterior_base_counts', type=float, default=None, help='Base counts of the clusters for the posterior, which avoids underflow in the computation of Dirichlet gradients. Use 0.1 / num_clusters by default.')
-	par_parser.add_argument('-H', '--hierarchical_noise', action='store_true', help='If selected, assume an additional noise to the mixed features of each data point.')
 	par_parser.add_argument('--fft_frame_length', type=float, default=0.008, help='FFT frame length in sec.')
 	par_parser.add_argument('--fft_step_size', type=float, default=0.004, help='FFT step size in sec.')
 	par_parser.add_argument('--fft_window_type', type=str, default='hann_window', help='Window type for FFT. "hann_window" by default.')
@@ -424,11 +454,6 @@ if __name__ == '__main__':
 	if parameters.decoder_rnn_type is None:
 		parameters.decoder_rnn_type = parameters.encoder_rnn_type
 
-	if len(parameters.prior_base_counts)==1:
-		prior_base_counts = parameters.prior_base_counts[0]
-	else:
-		prior_base_counts = torch.tensor(parameters.prior_base_counts)
-
 	# Get a model.
 	learner = Learner(
 				int(fft_frame_length / 2 + 1),
@@ -436,7 +461,6 @@ if __name__ == '__main__':
 				parameters.decoder_rnn_hidden_size,
 				parameters.mlp_hidden_size,
 				parameters.feature_size,
-				parameters.num_clusters,
 				save_dir,
 				encoder_rnn_type=parameters.encoder_rnn_type,
 				decoder_rnn_type=parameters.decoder_rnn_type,
@@ -448,10 +472,6 @@ if __name__ == '__main__':
 				decoder_self_feedback=not parameters.greedy_decoder,
 				bidirectional_decoder=parameters.bidirectional_decoder,
 				right2left_decoder_weight=parameters.right2left_decoder_weight,
-				prior_base_counts=prior_base_counts,
-				relax_scalar=parameters.relax_scalar,
-				hierarchical_noise=parameters.hierarchical_noise,
-				posterior_base_counts=parameters.posterior_base_counts,
 				num_speakers=num_speakers,
 				speaker_embed_dim=parameters.speaker_embed_dim
 				)

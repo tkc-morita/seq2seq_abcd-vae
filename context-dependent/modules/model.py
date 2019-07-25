@@ -4,14 +4,7 @@ import torch
 import math
 
 def choose_distribution(distribution_name):
-	distributions = {
-		"isotropic_gaussian":
-			(
-				sample_from_isotropic_gaussian,
-				log_pdf_isotropic_gaussian,
-				kl_isotropic_to_standard_gaussian,
-				2
-			)}
+	distributions = {"isotropic_gaussian":(sample_from_isotropic_gaussian,log_pdf_isotropic_gaussian,kl_isotropic_to_standard_gaussian)}
 	return distributions[distribution_name]
 
 @torch.jit.script
@@ -45,17 +38,18 @@ class RNN_Variational_Encoder(torch.nn.Module):
 	Kingma and Willing 2014. Auto-Encoding Variational Bayes.
 	Bowman et al. 2016. Generating Sentences from a Continuous Space.
 	"""
-	def __init__(self, input_size, rnn_hidden_size, rnn_type='LSTM', rnn_layers=1, hidden_dropout = 0.0, bidirectional=True, esn_leak=1.0):
+	def __init__(self, input_size, rnn_hidden_size, mlp_hidden_size, parameter_size, rnn_type='LSTM', rnn_layers=1, hidden_dropout = 0.0, bidirectional=True, esn_leak=1.0):
 		super(RNN_Variational_Encoder, self).__init__()
 		if rnn_type == 'ESN':
 			self.rnn = ESN(input_size, rnn_hidden_size, rnn_layers, dropout=hidden_dropout, bidirectional=bidirectional, batch_first=True, leak=esn_leak)
 		else:
 			self.rnn = getattr(torch.nn, rnn_type)(input_size, rnn_hidden_size, rnn_layers, dropout=hidden_dropout, bidirectional=bidirectional, batch_first=True)
-		self.hidden_size_total = rnn_layers * rnn_hidden_size
+		hidden_size_total = rnn_layers * rnn_hidden_size
 		if bidirectional:
-			self.hidden_size_total *= 2
+			hidden_size_total *= 2
 		if rnn_type == 'LSTM':
-			self.hidden_size_total *= 2
+			hidden_size_total *= 2
+		self.to_parameters = MLP_To_k_Vecs(hidden_size_total, mlp_hidden_size, parameter_size, 2)
 
 	def forward(self, packed_input):
 		_, last_hidden = self.rnn(packed_input)
@@ -63,19 +57,7 @@ class RNN_Variational_Encoder(torch.nn.Module):
 			last_hidden = torch.cat(last_hidden, dim=-1)
 		# Flatten the last_hidden into batch_size x rnn_layers * hidden_size
 		last_hidden = last_hidden.transpose(0,1).contiguous().view(last_hidden.size(1), -1)
-		return last_hidden
-
-	def pack_init_parameters(self):
-		parameters = {
-			"input_size": self.rnn.input_size,
-			"rnn_hidden_size": self.rnn.hidden_size,
-			"rnn_type": self.rnn.mode.split('_')[0],
-			"rnn_layers": self.rnn.num_layers,
-			"hidden_dropout": self.rnn.dropout,
-			"bidirectional": self.rnn.bidirectional,
-		}
-		if parameters['rnn_type'] == 'ESN':
-			parameters["esn_leak"] = self.rnn.leak
+		parameters = self.to_parameters(last_hidden)
 		return parameters
 
 
@@ -88,7 +70,7 @@ class RNN_Variational_Decoder(torch.nn.Module):
 	Kingma and Willing 2014. Auto-Encoding Variational Bayes.
 	Bowman et al. 2016. Generating Sentences from a Continuous Space.
 	"""
-	def __init__(self, output_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_distr_name='isotropic_gaussian', rnn_type='LSTM', rnn_layers=1, input_dropout = 0.0, self_feedback=True, bidirectional=False, right2left_weight=0.5, esn_leak=1.0, num_speakers = None, speaker_embed_dim=None):
+	def __init__(self, output_size, rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type='LSTM', rnn_layers=1, input_dropout = 0.0, self_feedback=True, bidirectional=False, esn_leak=1.0, num_speakers = None, speaker_embed_dim=None):
 		super(RNN_Variational_Decoder, self).__init__()
 		assert rnn_layers==1, 'Only rnn_layers=1 is currently supported.'
 		if not self_feedback:
@@ -108,9 +90,7 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			hidden_size_total *= 2
 			self.rnn_cell_reverse = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, input_dropout=input_dropout, esn_leak=esn_leak)
 			self.offset_predictor_reverse = MLP(rnn_hidden_size, mlp_hidden_size, 1)
-			self.emission_sampler_reverse = Sampler(rnn_hidden_size, mlp_hidden_size, output_size, distribution_name=emission_distr_name)
-			self.log_left2right_weight = torch.tensor(1 - right2left_weight).log()
-			self.log_right2left_weight = torch.tensor(right2left_weight).log()
+			self.to_parameters_reverse = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 2)
 		self.feature_size = feature_size # Save the feature_size w/o speaker_embed_dim.
 		if num_speakers is None or speaker_embed_dim is None:
 			self.embed_speaker = None
@@ -118,33 +98,12 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			self.embed_speaker = torch.nn.Embedding(num_speakers, speaker_embed_dim, sparse=True)
 			feature_size += speaker_embed_dim
 		self.feature2hidden = torch.nn.Linear(feature_size, hidden_size_total)
+		self.to_parameters = MLP_To_k_Vecs(rnn_hidden_size, mlp_hidden_size, output_size, 2)
 		self.offset_predictor = MLP(rnn_hidden_size, mlp_hidden_size, 1)
-		self.bce_with_logits_loss = torch.nn.BCEWithLogitsLoss(reduction='sum')
-		self.emission_sampler = Sampler(rnn_hidden_size, mlp_hidden_size, output_size, distribution_name=emission_distr_name)
+		self.emission_sampler = emission_sampler
 		self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, input_dropout=input_dropout, esn_leak=esn_leak)
 
-	def pack_init_parameters(self):
-		parameters = {
-			"output_size": self.rnn_cell.cell.input_size,
-			"rnn_hidden_size": self.rnn_cell.cell.hidden_size,
-			"mlp_hidden_size": self.offset_predictor.hidden_size,
-			"feature_size": self.feature_size,
-			"emission_distr_name": self.emission_sampler.distribution_name,
-			"rnn_type": self.rnn_cell.mode,
-			"rnn_layers": 1,
-			"input_dropout": self.rnn_cell.drop.p,
-			"bidirectional": self.bidirectional,
-		}
-		if parameters["rnn_type"] == "ESN":
-			parameters["esn_leak"] = self.rnn_cell.cell.leak
-		if not self.embed_speaker is None:
-			parameters["num_speakers"] = self.embed_speaker.num_embeddings
-			parameters["speaker_embed_dim"] = self.embed_speaker.embedding_dim
-		if self.bidirectional:
-			parameters["right2left_weight"] = self.log_right2left_weight.exp().item()
-		return parameters
-
-	def forward(self, features, lengths=None, batch_sizes=None, speaker=None, ground_truth_out=None, ground_truth_offset=None):
+	def forward(self, features, lengths=None, batch_sizes=None, speaker=None):
 		"""
 		The output is "flatten", meaning that it's PackedSequence.data.
 		This should be sufficient for the training purpose etc. while we can avoid padding, which would affect the autograd and thus requires masking in the loss calculation.
@@ -156,46 +115,41 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			speaker_embedding = self.embed_speaker(speaker)
 			features = torch.cat([features,speaker_embedding], dim=-1)
 		if self.bidirectional:
-			return self._forward_bidirectional(features, batch_sizes, ground_truth_out, ground_truth_offset)
+			return self._forward_bidirectional(features, batch_sizes)
 		else:
-			return self._forward_unidirectional(features, batch_sizes, ground_truth_out, ground_truth_offset)
+			return self._forward_unidirectional(features, batch_sizes)
 	
 
 	# @torch.jit.script_method
-	def _forward_unidirectional(self, features, batch_sizes, ground_truth_out, ground_truth_offset):
+	def _forward_unidirectional(self, features, batch_sizes):
 		"""
 		Manual implementation of RNNs based on RNNCell.
 		"""
 		hidden = self.feature2hidden(features)
 		hidden = self.reshape_hidden(hidden)
 		flatten_rnn_out = []
-		flatten_emission_params = []
+		flatten_emission_param1 = []
+		flatten_emission_param2 = []
 		flatten_out = []
 		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(features.device)
 		for t in range(len(batch_sizes)):
 			bs = batch_sizes[t]
 			hidden = self.rnn_cell(batched_input[:bs], self.shrink_hidden(hidden,bs))
 			rnn_out = self.get_output(hidden)
-			emission_params = self.emission_sampler(rnn_out)
-			batched_input = self.emission_sampler.sample(emission_params)
+			emission_param1,emission_param2 = self.to_parameters(rnn_out)
+			batched_input = self.emission_sampler(emission_param1, emission_param2)
 			flatten_rnn_out += [rnn_out]
-			flatten_emission_params += [emission_params]
+			flatten_emission_param1 += [emission_param1]
+			flatten_emission_param2 += [emission_param2]
 			flatten_out += [batched_input]
 		flatten_rnn_out = torch.cat(flatten_rnn_out, dim=0)
-		flatten_emission_params = tuple(torch.cat(params, dim=0) for params in zip(*flatten_emission_params))
+		flatten_emission_param1 = torch.cat(flatten_emission_param1, dim=0)
+		flatten_emission_param2 = torch.cat(flatten_emission_param2, dim=0)
 		flatten_out = torch.cat(flatten_out, dim=0)
-		if ground_truth_out is None:
-			emission_loss = None
-		else:
-			emission_loss = -self.emission_sampler.log_pdf(ground_truth_out, flatten_emission_params)
 		flatten_offset_weights = self.offset_predictor(flatten_rnn_out).squeeze(-1) # num_batches x 1 -> num_batches
-		if ground_truth_offset is None:
-			offset_loss = None
-		else:
-			offset_loss = self.bce_with_logits_loss(flatten_offset_weights, ground_truth_offset)
-		return emission_loss, offset_loss, flatten_out, flatten_emission_params, flatten_offset_weights
+		return (((flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out),)
 
-	def _forward_bidirectional(self, features, batch_sizes, ground_truth_out, ground_truth_offset):
+	def _forward_bidirectional(self, features, batch_sizes):
 		"""
 		The output is "flatten", meaning that it's PackedSequence.data.
 		This should be sufficient for the training purpose etc. while we can avoid padding, which would affect the autograd and thus requires masking in the loss calculation.
@@ -207,10 +161,12 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		hidden_reverse_full = self.reshape_hidden(hidden_reverse_full)
 
 		flatten_rnn_out = []
-		flatten_emission_params = []
+		flatten_emission_param1 = []
+		flatten_emission_param2 = []
 		flatten_out = []
 		flatten_rnn_out_reverse = []
-		flatten_emission_params_reverse = []
+		flatten_emission_param1_reverse = []
+		flatten_emission_param2_reverse = []
 		flatten_out_reverse = []
 		batched_input = torch.zeros(batch_sizes[0], self.rnn_cell.cell.input_size).to(features.device)
 		zero_input_fullsize = torch.zeros_like(batched_input).to(features.device)
@@ -225,39 +181,32 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			previous_bs_reverse = bs_reverse
 			rnn_out = self.get_output(hidden)
 			rnn_out_reverse = self.get_output(hidden_reverse)
-			emission_params = self.emission_sampler(rnn_out)
-			emission_params_reverse = self.emission_sampler_reverse(rnn_out_reverse)
-			batched_input = self.emission_sampler.sample(emission_params)
-			batched_input_reverse = self.emission_sampler_reverse.sample(emission_params_reverse)
+			emission_param1,emission_param2 = self.to_parameters(rnn_out)
+			emission_param1_reverse, emission_param2_reverse = self.to_parameters_reverse(rnn_out_reverse)
+			batched_input = self.emission_sampler(emission_param1, emission_param2)
+			batched_input_reverse = self.emission_sampler(emission_param1_reverse, emission_param2_reverse)
 			flatten_rnn_out += [rnn_out]
-			flatten_emission_params += [emission_params]
+			flatten_emission_param1 += [emission_param1]
+			flatten_emission_param2 += [emission_param2]
 			flatten_out += [batched_input]
 			flatten_rnn_out_reverse = [rnn_out_reverse] + flatten_rnn_out_reverse
-			flatten_emission_params_reverse = [emission_params_reverse] + flatten_emission_params_reverse
+			flatten_emission_param1_reverse = [emission_param1_reverse] + flatten_emission_param1_reverse
+			flatten_emission_param2_reverse = [emission_param2_reverse] + flatten_emission_param2_reverse
 			flatten_out_reverse = [batched_input_reverse] + flatten_out_reverse
 		flatten_rnn_out = torch.cat(flatten_rnn_out, dim=0)
-		flatten_emission_params = tuple(torch.cat(param, dim=0) for param in zip(*flatten_emission_params))
+		flatten_emission_param1 = torch.cat(flatten_emission_param1, dim=0)
+		flatten_emission_param2 = torch.cat(flatten_emission_param2, dim=0)
 		flatten_out = torch.cat(flatten_out, dim=0)
 		flatten_rnn_out_reverse = torch.cat(flatten_rnn_out_reverse, dim=0)
-		flatten_emission_params_reverse = tuple(torch.cat(param, dim=0) for param in zip(*flatten_emission_params_reverse))
+		flatten_emission_param1_reverse = torch.cat(flatten_emission_param1_reverse, dim=0)
+		flatten_emission_param2_reverse = torch.cat(flatten_emission_param2_reverse, dim=0)
 		flatten_out_reverse = torch.cat(flatten_out_reverse, dim=0)
-		if ground_truth_out is None:
-			emission_loss = None
-		else:
-			emission_loss = torch.stack([
-				-self.emission_sampler.log_pdf(ground_truth_out, flatten_emission_params) + self.log_left2right_weight,
-				-self.emission_sampler_reverse.log_pdf(ground_truth_out, flatten_emission_params_reverse) + self.log_right2left_weight
-			]).logsumexp(dim=0)
 		flatten_offset_weights = self.offset_predictor(flatten_rnn_out).squeeze(-1) # num_batches x 1 -> num_batches
 		flatten_offset_weights_reverse = self.offset_predictor_reverse(flatten_rnn_out_reverse).squeeze(-1)
-		if ground_truth_offset is None:
-			offset_loss = None
-		else:
-			offset_loss = torch.stack([
-				self.bce_with_logits_loss(flatten_offset_weights, ground_truth_offset),
-				self.bce_with_logits_loss(flatten_emission_params_reverse, ground_truth_offset)
-			]).logsumexp(dim=0)
-		return emission_loss, offset_loss, (flatten_out, flatten_out_reverse), (flatten_emission_params, flatten_emission_params_reverse), (flatten_offset_weights, flatten_offset_weights_reverse)
+		return (
+				((flatten_emission_param1,flatten_emission_param2), flatten_offset_weights, flatten_out),
+				((flatten_emission_param1_reverse,flatten_emission_param2_reverse), flatten_offset_weights_reverse, flatten_out_reverse),
+				)
 
 	def _split_into_hidden_and_cell(self, reshaped_hidden):
 		return (reshaped_hidden[...,0],reshaped_hidden[...,1])
@@ -284,7 +233,6 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		self.emission_sampler = self._emission_sampler
 
 
-
 class RNN_Cell(torch.nn.Module):
 	def __init__(self, input_size, hidden_size, model_type='LSTM', input_dropout = 0.0, esn_leak=1.0):
 		super(RNN_Cell, self).__init__()
@@ -304,16 +252,11 @@ class RNN_Cell(torch.nn.Module):
 class MLP_To_k_Vecs(torch.nn.Module):
 	def __init__(self, input_size, hidden_size, output_size, k):
 		super(MLP_To_k_Vecs, self).__init__()
-		self.input_size = input_size
-		self.hidden_size = hidden_size
-		self.output_size = output_size
-		self.k = k
 		self.mlps = torch.nn.ModuleList([MLP(input_size, hidden_size, output_size) for ix in range(k)])
 		
 	def forward(self, batched_input):
 		out = [mlp(batched_input) for mlp in self.mlps]
 		return out
-
 
 class MLP(torch.jit.ScriptModule):
 # class MLP(torch.nn.Module):
@@ -322,9 +265,7 @@ class MLP(torch.jit.ScriptModule):
 	"""
 	def __init__(self, input_size, hidden_size, output_size):
 		super(MLP, self).__init__()
-		self.input_size = input_size
 		self.hidden_size = hidden_size
-		self.output_size = output_size
 		self.whole_network = torch.nn.Sequential(
 			torch.nn.Linear(input_size, hidden_size),
 			torch.nn.Tanh(),
@@ -522,161 +463,6 @@ class ESNCell(torch.jit.ScriptModule):
 		hidden = (1.0 - self.leak) * hidden + self.leak * update
 		return hidden
 
-class SampleFromDirichlet(torch.nn.Module):
-	def __init__(self, num_clusters, mlp_input_size, mlp_hidden_size, relax_scalar=0.05, prior_base_counts = 1.0, posterior_base_counts=None):
-		super(SampleFromDirichlet, self).__init__()
-		self.relax_scalar = relax_scalar
 
-
-		if isinstance(prior_base_counts, float):
-			prior_base_counts = torch.full((num_clusters,), prior_base_counts, requires_grad=False)
-		self.register_parameter('prior_base_counts', torch.nn.Parameter(prior_base_counts, requires_grad=False))
-		self.p_pi = torch.distributions.dirichlet.Dirichlet(self.prior_base_counts)
-		self.register_parameter(
-				'q_pi_weights',
-				torch.nn.Parameter(
-					self.prior_base_counts.clone().detach(),
-					requires_grad=True)
-				)
-		self.to_q_kappa_weights = MLP(mlp_input_size, mlp_hidden_size, num_clusters)
-		if posterior_base_counts is None:
-			posterior_base_counts = 0.1 / num_clusters
-		self.posterior_base_counts = posterior_base_counts
-		self.to_non_negative = lambda x, floor: torch.nn.ELU()(x) + 1.0 + floor
-
-
-	def forward(self, weights_seed, entire_data_size):
-		# Sample a relaxed category assignment kappa from q(kappa | x) = Dirichlet(q_kappa_weights).
-		q_kappa_weights = self.to_non_negative(self.to_q_kappa_weights(weights_seed), self.posterior_base_counts)
-		q_kappa_given_x = torch.distributions.dirichlet.Dirichlet(q_kappa_weights)
-		kappa = q_kappa_given_x.rsample()
-
-		# Sample a shape pi of the Dirichlet prior p(kappa | pi) from q(pi) = Dirichlet(self.q_pi_weights)
-		q_pi = torch.distributions.dirichlet.Dirichlet(self.to_non_negative(self.q_pi_weights, self.prior_base_counts))
-		pi = q_pi.rsample(sample_shape=(kappa.size(0),))
-
-		# Compute the KL divergence between q(pi) and p(pi).
-		kl_divergence = torch.distributions.kl_divergence(q_pi, self.p_pi) / entire_data_size
-
-		# Compute the KL divergence between q(kappa | x) and p(kappa | pi).
-		p_kappa_given_pi = torch.distributions.dirichlet.Dirichlet(self.relax_scalar * pi)
-		kl_divergence += torch.distributions.kl_divergence(q_kappa_given_x, p_kappa_given_pi).sum()
-
-		return kappa, kl_divergence, q_kappa_weights
-
-	def pack_init_parameters(self):
-		parameters = {
-			"num_clusters":self.prior_base_counts.size(0),
-			"mlp_input_size":self.to_q_kappa_weights.input_size,
-			"mlp_hidden_size":self.to_q_kappa_weights.hidden_size,
-			"relax_scalar":self.relax_scalar,
-			"posterior_base_counts":self.posterior_base_counts
-		}
-		return parameters
-
-
-class SampleFromIsotropicGaussianMixture(torch.nn.Module):
-	def __init__(self, prior_mean=0.0, prior_sd=1.0, num_clusters=None, ndim=None, post_mixture_noise=False, post_mixture_noise_prior_sd=None, mlp_input_size=None, mlp_hidden_size=None):
-		super(SampleFromIsotropicGaussianMixture, self).__init__()
-		if isinstance(prior_mean,float):
-			assert not (ndim is None or num_clusters is None), 'num_clusters and ndim must be specified when prior_mean is a scalar.'
-			prior_mean = torch.full((num_clusters, ndim), prior_mean)
-		if isinstance(prior_sd,float):
-			prior_sd = torch.full_like(prior_mean, prior_sd)
-		self.register_parameter('prior_mean', torch.nn.Parameter(prior_mean, requires_grad=False))
-		self.register_parameter('prior_sd', torch.nn.Parameter(prior_sd, requires_grad=False))
-		self.post_mixture_noise = post_mixture_noise
-		if post_mixture_noise_prior_sd is None:
-			post_mixture_noise_prior_sd = 1.0
-		if isinstance(post_mixture_noise_prior_sd, float):
-			post_mixture_noise_prior_sd = torch.full((self.prior_sd.size(-1),), post_mixture_noise_prior_sd)
-		self.register_parameter('post_mixture_noise_prior_sd', torch.nn.Parameter(post_mixture_noise_prior_sd, requires_grad=False))
-		self.prior_distr_cluster_mean = torch.distributions.normal.Normal(self.prior_mean, self.prior_sd)
-		self.register_parameter(
-				'posterior_mean',
-				torch.nn.Parameter(
-					self.prior_mean.clone().detach(),
-					requires_grad=True)
-				)
-
-		self.register_parameter(
-				'posterior_log_var',
-				torch.nn.Parameter(
-					self.prior_sd.clone().detach().log()*2.0,
-					requires_grad=True)
-				)
-		if post_mixture_noise:
-			self.to_parameters = MLP_To_k_Vecs(mlp_input_size, mlp_hidden_size, self.prior_sd.size(-1), 2)
-
-	def forward(self, cluster_weights, entire_data_size, parameter_seed=None):
-		# broadcast cluster_weights
-		cluster_weights = cluster_weights.view(cluster_weights.size()+(1,))
-
-		# Sample values on mixture components from q(cluster_mean) = N(posterior_mean, posterior_distr_sd).
-		posterior_distr_cluster_mean = torch.distributions.normal.Normal(self.posterior_mean, (0.5 * self.posterior_log_var).exp())
-		samples = posterior_distr_cluster_mean.rsample((cluster_weights.size(0),))
-		samples = (cluster_weights * samples).sum(1)
-
-		# Measure the KL divergence between q(cluster_mean) and p(cluster_mean).
-		kl_divergence = torch.distributions.kl_divergence(posterior_distr_cluster_mean, self.prior_distr_cluster_mean).sum() / entire_data_size
-
-		if self.post_mixture_noise: # Pre-decoder Gaussian noise to individual data points.
-			# Define q(z | x).
-			posterior_mean, posterior_log_var = self.to_parameters(parameter_seed)
-			posterior_distr_individual = torch.distributions.normal.Normal(posterior_mean, (0.5 * posterior_log_var).exp())
-
-			# Get the prior distribution given the cluster_weights, p(z | cluster_weights * cluster_means (= samples)).
-			prior_distr_individual = torch.distributions.normal.Normal(samples, self.post_mixture_noise_prior_sd)
-
-			# Measure the KL divergence between the posterior q(z | x) and the prior p(z | cluster_weights).
-			kl_divergence = torch.distributions.kl_divergence(posterior_distr_individual, prior_distr_individual).sum()
-
-			# Sample from q(z | x)
-			samples = posterior_distr_individual.rsample()
-		else: # The only noise is of each cluster's Gaussian.
-			posterior_mean, posterior_log_var = self.posterior_mean, self.posterior_log_var
-		return samples, kl_divergence, (posterior_mean, posterior_log_var)
-
-	def pack_init_parameters(self):
-		parameters = {
-			"num_clusters":self.prior_mean.size(0),
-			"ndim":self.prior_mean.size(1),
-			"post_mixture_noise":self.post_mixture_noise,
-		}
-		if self.post_mixture_noise:
-			parameters["mlp_input_size"] = self.to_parameters.input_size
-			parameters["mlp_hidden_size"] = self.to_parameters.hidden_size
-		return parameters
-
-
-class Sampler(torch.nn.Module):
-	def __init__(self, input_size, mlp_hidden_size, output_size, distribution_name = "isotropic_gaussian"):
-		super(Sampler, self).__init__()
-		self.distribution_name = distribution_name
-		self._sampler, self._log_pdf, self._kl_divergence, num_parameters = choose_distribution(distribution_name)
-		self.to_parameters = MLP_To_k_Vecs(input_size, mlp_hidden_size, output_size, num_parameters)
-
-	def forward(self, parameter_seed):
-		"""
-		Convert vectors into the parameters of the sampler.
-		"""
-		parameters = self.to_parameters(parameter_seed)
-		return parameters
-
-	def sample(self, parameters):
-		return self._sampler(*parameters)
-
-	def kl_divergence(self, parameters):
-		return self._kl_divergence(*parameters)
-
-	def log_pdf(self, samples, parameters):
-		return self._log_pdf(samples, *parameters)
-
-	def pack_init_parameters(self):
-		parameters = {
-			"input_size": self.to_parameters.input_size,
-			"mlp_hidden_size": self.to_parameters.hidden_size,
-			"output_size": self.to_parameters.output_size,
-			"distribution_name": self.distribution_name
-		}
-		return parameters
+	def init_hidden(self, batch_size):
+		return torch.zeros((batch_size, self.hidden_size), requires_grad=False)
