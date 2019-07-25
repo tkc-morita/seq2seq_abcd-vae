@@ -32,8 +32,9 @@ class Encoder(learning.Learner):
 			_,_,cluster_weights = self.mixture_ratio_sampler(last_hidden, 1)
 			cluster_weights /= cluster_weights.sum(-1).view(cluster_weights.size()[:-1]+(1,))
 			_,_,(mean,log_var) = self.mixture_components(cluster_weights, 1, parameter_seed=last_hidden)
-			if mean.dim() == 3:
-				mean = (cluster_weights.view(cluster_weights.size()+(1,)) * mean).sum(1)
+			if mean.dim() == 2: # i.e., self.mixture_components.post_mixture_noise==False
+				mean = mean.view((1,)+mean.size())
+			mean = (cluster_weights.view(cluster_weights.size()+(1,)) * mean).sum(1)
 		if to_numpy:
 			cluster_weights = cluster_weights.cpu().numpy()
 			mean = mean.data.cpu().numpy()
