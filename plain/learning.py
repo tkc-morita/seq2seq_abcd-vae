@@ -291,6 +291,7 @@ class Learner(object):
 		self.feature_sampler = model.Sampler(**checkpoint['feature_sampler_init_parameters'])
 		self.decoder = model.RNN_Variational_Decoder(**checkpoint['decoder_init_parameters'])
 		self.encoder.load_state_dict(checkpoint['encoder'])
+		self.feature_sampler.load_state_dict(checkpoint['feature_sampler'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
 		self.encoder.to(self.device)
 		self.feature_sampler.to(self.device)
