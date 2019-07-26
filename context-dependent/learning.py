@@ -466,7 +466,7 @@ if __name__ == '__main__':
 	logger.info("STFT window type: {fft_window}".format(fft_window=parameters.fft_window_type))
 	logger.info("STFT frame lengths: {fft_frame_length_in_sec} sec".format(fft_frame_length_in_sec=parameters.fft_frame_length))
 	logger.info("STFT step size: {fft_step_size_in_sec} sec".format(fft_step_size_in_sec=parameters.fft_step_size))
-
+	logger.info("{context_length} sec before and after the target region are fed to the decoder.".format(context_length=parameters.context_length))
 
 	train_dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft,log_and_normalize]), channel=parameters.channel, context_length_in_sec=parameters.context_length)
 	valid_dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft,log_and_normalize]), channel=parameters.channel, context_length_in_sec=parameters.context_length)
