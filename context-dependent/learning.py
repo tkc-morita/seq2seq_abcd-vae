@@ -5,7 +5,7 @@ from modules.data_utils import Compose
 import numpy as np
 from modules import model, data_utils
 from logging import getLogger,FileHandler,DEBUG,Formatter
-import os, argparse, itertools
+import os, argparse, itertools, collections
 
 logger = getLogger(__name__)
 
@@ -56,7 +56,8 @@ class Learner(object):
 			decoder_self_feedback=True,
 			esn_leak=1.0,
 			num_speakers=None,
-			speaker_embed_dim=None
+			speaker_embed_dim=None,
+			context_feature_size=None,
 			):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
 		if torch.cuda.is_available():
@@ -87,10 +88,23 @@ class Learner(object):
 				logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
 				encoder_hidden_dropout = 0.0
 			self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
+			if context_feature_size is None:
+				context_feature_size = feature_size
+			prefix_encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
+			self.prefix_encoder = torch.nn.Sequential(collections.OrderedDict([
+				('rnn', prefix_encoder),
+				('mlp', model.MLP(prefix_encoder.hidden_size_total, mlp_hidden_size, context_feature_size))
+			]))
+			suffix_encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
+			self.suffix_encoder = torch.nn.Sequential(collections.OrderedDict([
+				('rnn', suffix_encoder),
+				('mlp', model.MLP(suffix_encoder.hidden_size_total, mlp_hidden_size, context_feature_size))
+			]))
 			self.feature_sampler = model.Sampler(self.encoder.hidden_size_total, mlp_hidden_size, feature_size, distribution_name=feature_distribution)
-			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_distr_name=emission_distribution, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder, right2left_weight=right2left_decoder_weight, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
+			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size+context_feature_size*2, emission_distr_name=emission_distribution, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder, right2left_weight=right2left_decoder_weight, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
 			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
 			logger.info('Features are assumed to be distributed according to {feature_distribution}.'.format(feature_distribution=feature_distribution))
+			logger.info('Prefix and suffix are (deterministically) embedded into {context_feature_size}-dim features.'.format(context_feature_size=context_feature_size))
 			logger.info('Conditioned on the features, data are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
 			logger.info('Random seed: {seed}'.format(seed = seed))
 			logger.info('Type of RNN used for the encoder: {rnn_type}'.format(rnn_type=encoder_rnn_type))
@@ -113,9 +127,11 @@ class Learner(object):
 				logger.info("Speaker ID # is embedded and fed to the decoder.")
 				logger.info("# of speakers: {num_speakers}".format(num_speakers=num_speakers))
 				logger.info("Embedding dimension: {speaker_embed_dim}".format(speaker_embed_dim=speaker_embed_dim))
-			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.feature_sampler.parameters(), self.decoder.parameters())
+			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.prefix_encoder.parameters(), self.suffix_encoder.parameters(), self.feature_sampler.parameters(), self.decoder.parameters())
 
 			self.encoder.to(self.device)
+			self.prefix_encoder.to(self.device)
+			self.suffix_encoder.to(self.device)
 			self.feature_sampler.to(self.device)
 			self.decoder.to(self.device)
 
@@ -127,6 +143,8 @@ class Learner(object):
 		Training phase. Updates weights.
 		"""
 		self.encoder.train() # Turn on training mode which enables dropout.
+		self.prefix_encoder.train()
+		self.suffix_encoder.train()
 		self.feature_sampler.train()
 		self.decoder.train()
 
@@ -136,9 +154,11 @@ class Learner(object):
 
 		num_batches = dataloader.get_num_batches()
 
-		for batch_ix,(packed_input, is_offset, speaker, _) in enumerate(dataloader, 1):
+		for batch_ix,(packed_input, is_offset, packed_prefix, packed_suffix, speaker, _) in enumerate(dataloader, 1):
 			packed_input = packed_input.to(self.device)
 			is_offset = is_offset.to(self.device)
+			packed_prefix = packed_prefix.to(self.device)
+			packed_suffix = packed_suffix.to(self.device)
 			speaker = speaker.to(self.device)
 
 			self.optimizer.zero_grad()
@@ -146,6 +166,9 @@ class Learner(object):
 			last_hidden = self.encoder(packed_input)
 			feature_params = self.feature_sampler(last_hidden)
 			features = self.feature_sampler.sample(feature_params)
+			prefix_features = self.prefix_encoder(packed_prefix)
+			suffix_features = self.suffix_encoder(packed_suffix)
+			features = torch.cat([features, prefix_features, suffix_features], dim=-1) # This concat order is arbitrary.
 			kl_loss_per_batch = self.feature_sampler.kl_divergence(feature_params)
 			emission_loss_per_batch, end_prediction_loss_per_batch, _, _, _ = self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker, ground_truth_out=packed_input.data, ground_truth_offset=is_offset.data)
 
@@ -180,6 +203,8 @@ class Learner(object):
 		Test/validation phase. No update of weights.
 		"""
 		self.encoder.eval() # Turn on evaluation mode which disables dropout.
+		self.prefix_encoder.eval()
+		self.suffix_encoder.eval()
 		self.feature_sampler.eval()
 		self.decoder.eval()
 
@@ -191,14 +216,19 @@ class Learner(object):
 		num_batches = dataloader.get_num_batches()
 
 		with torch.no_grad():
-			for batch_ix, (packed_input, is_offset, speaker, _) in enumerate(dataloader, 1):
+			for batch_ix, (packed_input, is_offset, packed_prefix, packed_suffix, speaker, _) in enumerate(dataloader, 1):
 				packed_input = packed_input.to(self.device)
 				is_offset = is_offset.to(self.device)
+				packed_prefix = packed_prefix.to(self.device)
+				packed_suffix = packed_suffix.to(self.device)
 				speaker = speaker.to(self.device)
 
 				last_hidden = self.encoder(packed_input)
 				feature_params = self.feature_sampler(last_hidden)
 				features = self.feature_sampler.sample(feature_params)
+				prefix_features = self.prefix_encoder(packed_prefix)
+				suffix_features = self.suffix_encoder(packed_suffix)
+				features = torch.cat([features, prefix_features, suffix_features], dim=-1) # This concat order is arbitrary.
 				kl_loss += self.feature_sampler.kl_divergence(feature_params).item()
 				emission_loss_per_batch, end_prediction_loss_per_batch, _, _, _ = self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker, ground_truth_out=packed_input.data, ground_truth_offset=is_offset.data)
 				emission_loss += emission_loss_per_batch.item()
@@ -267,6 +297,10 @@ class Learner(object):
 			'epoch':epoch,
 			'encoder':self.encoder.state_dict(),
 			'encoder_init_parameters':self.encoder.pack_init_parameters(),
+			'prefix_encoder':self.prefix_encoder.state_dict(),
+			'prefix_encoder_init_parameters':self.prefix_encoder.rnn.pack_init_parameters(),
+			'suffix_encoder':self.suffix_encoder.state_dict(),
+			'suffix_encoder_init_parameters':self.suffix_encoder.rnn.pack_init_parameters(),
 			'feature_sampler':self.feature_sampler.state_dict(),
 			'feature_sampler_init_parameters':self.feature_sampler.pack_init_parameters(),
 			'decoder':self.decoder.state_dict(),
@@ -288,16 +322,33 @@ class Learner(object):
 		checkpoint = torch.load(checkpoint_path, map_location='cpu') # Random state needs to be loaded to CPU first even when cuda is available.
 
 		self.encoder = model.RNN_Variational_Encoder(**checkpoint['encoder_init_parameters'])
+		mlp_hidden_size = checkpoint['decoder_init_parameters']['mlp_hidden_size']
+		context_feature_size = (checkpoint['decoder_init_parameters']['feature_size'] - checkpoint['feature_sampler_init_parameters']['output_size']) // 2
+		prefix_encoder = model.RNN_Variational_Encoder(**checkpoint['prefix_encoder_init_parameters'])
+		self.prefix_encoder = torch.nn.Sequential(collections.OrderedDict([
+			('rnn', prefix_encoder),
+			('mlp', model.MLP(prefix_encoder.hidden_size_total, mlp_hidden_size, context_feature_size))
+		]))
+		suffix_encoder = model.RNN_Variational_Encoder(**checkpoint['suffix_encoder_init_parameters'])
+		self.suffix_encoder = torch.nn.Sequential(collections.OrderedDict([
+			('rnn', suffix_encoder),
+			('mlp', model.MLP(suffix_encoder.hidden_size_total, mlp_hidden_size, context_feature_size))
+		]))
 		self.feature_sampler = model.Sampler(**checkpoint['feature_sampler_init_parameters'])
 		self.decoder = model.RNN_Variational_Decoder(**checkpoint['decoder_init_parameters'])
 		self.encoder.load_state_dict(checkpoint['encoder'])
+		self.prefix_encoder.load_state_dict(checkpoint['prefix_encoder'])
+		self.suffix_encoder.load_state_dict(checkpoint['suffix_encoder'])
+		self.feature_sampler.load_state_dict(checkpoint['feature_sampler'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
 		self.encoder.to(self.device)
+		self.prefix_encoder.to(self.device)
+		self.suffix_encoder.to(self.device)
 		self.feature_sampler.to(self.device)
 		self.decoder.to(self.device)
 
 
-		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.feature_sampler.parameters(), self.decoder.parameters())
+		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.prefix_encoder.parameters(), self.suffix_encoder.parameters(), self.feature_sampler.parameters(), self.decoder.parameters())
 		self.optimizer = torch.optim.SGD(self.parameters(), lr=0.1)
 		self.optimizer.load_state_dict(checkpoint['optimizer'])
 
@@ -333,6 +384,7 @@ def get_parameters():
 	par_parser.add_argument('-R', '--encoder_rnn_type', type=str, default='LSTM', help='Name of RNN to be used for the encoder.')
 	par_parser.add_argument('--decoder_rnn_type', type=str, default=None, help='Name of RNN to be used for the decoder. Same as the encoder by default.')
 	par_parser.add_argument('-f', '--feature_size', type=int, default=13, help='# of dimensions of features into which data are encoded.')
+	par_parser.add_argument('--context_feature_size', type=int, default=None, help='# of dimensions of features info which prefix and suffix are encoded. Equal to feature_size by default.')
 	par_parser.add_argument('--encoder_rnn_layers', type=int, default=1, help='# of hidden layers in the encoder RNN.')
 	par_parser.add_argument('--encoder_rnn_hidden_size', type=int, default=100, help='# of the RNN units in the encoder RNN.')
 	par_parser.add_argument('--decoder_rnn_hidden_size', type=int, default=100, help='# of the RNN units in the decoder RNN.')
@@ -349,6 +401,7 @@ def get_parameters():
 	par_parser.add_argument('--fft_window_type', type=str, default='hann_window', help='Window type for FFT. "hann_window" by default.')
 	par_parser.add_argument('--fft_no_centering', action='store_true', help='If selected, no centering in FFT.')
 	par_parser.add_argument('--channel', type=int, default=0, help='Channel ID # (starting from 0) of multichannel recordings to use.')
+	par_parser.add_argument('--context_length', type=float, default=1.0, help='Length of the prefix and suffix sound wave in sec.')
 	par_parser.add_argument('-N','--data_normalizer', type=float, default=1.0, help='Normalizing constant to devide the data.')
 	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
 
@@ -401,7 +454,8 @@ if __name__ == '__main__':
 				bidirectional_decoder=parameters.bidirectional_decoder,
 				right2left_decoder_weight=parameters.right2left_decoder_weight,
 				num_speakers=num_speakers,
-				speaker_embed_dim=parameters.speaker_embed_dim
+				speaker_embed_dim=parameters.speaker_embed_dim,
+				context_feature_size=parameters.context_feature_size,
 				)
 
 	to_tensor = data_utils.ToTensor()
@@ -414,8 +468,8 @@ if __name__ == '__main__':
 	logger.info("STFT step size: {fft_step_size_in_sec} sec".format(fft_step_size_in_sec=parameters.fft_step_size))
 
 
-	train_dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft,log_and_normalize]), channel=parameters.channel)
-	valid_dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft,log_and_normalize]), channel=parameters.channel)
+	train_dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft,log_and_normalize]), channel=parameters.channel, context_length_in_sec=parameters.context_length)
+	valid_dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft,log_and_normalize]), channel=parameters.channel, context_length_in_sec=parameters.context_length)
 	
 
 	if parameters.validation_batch_size is None:

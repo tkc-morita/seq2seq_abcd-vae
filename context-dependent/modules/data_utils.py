@@ -26,7 +26,7 @@ class Data_Parser(object):
 	def get_num_speakers(self):
 		return len(self.df_annotation.speaker.unique())
 
-	def get_data(self, data_type = None, transform = None, channel=0):
+	def get_data(self, data_type = None, transform = None, channel=0, context_length_in_sec=1.0):
 		if data_type is None:
 			sub_df = self.df_annotation.copy()
 		else:
@@ -35,7 +35,8 @@ class Data_Parser(object):
 						sub_df,
 						self.input_root,
 						transform=transform,
-						channel=channel
+						channel=channel,
+						context_length_in_sec=context_length_in_sec
 						)
 
 
@@ -77,14 +78,14 @@ class Dataset(torch.utils.data.Dataset):
 	def __getitem__(self, ix):
 		"""Return """
 		input_path = self.df_annotation.loc[ix, 'input_path']
-		_, input_data = spw.read(os.path.join(self.input_root, input_path))
-		if input_data.ndim > 1:
-			input_data = input_data[:,self.channel] # Use only one channel.
+		_, wave = spw.read(os.path.join(self.input_root, input_path))
+		if wave.ndim > 1:
+			wave = wave[:,self.channel] # Use only one channel.
 		onset_ix = self.df_annotation.loc[ix, 'onset_ix']
 		offset_ix = self.df_annotation.loc[ix, 'offset_ix']
-		input_data = input_data[onset_ix:offset_ix].astype(np.float32)
-		prefix = input_data[max(0, onset_ix-self.context_length):onset_ix]
-		suffix = input_data[offset_ix:min(input_data.size, offset_ix*self.context_length)]
+		input_data = wave[onset_ix:offset_ix].astype(np.float32)
+		prefix = wave[max(0, onset_ix-self.context_length):onset_ix].astype(np.float32)
+		suffix = wave[offset_ix:min(wave.size, offset_ix+self.context_length)].astype(np.float32)
 
 		speaker = self.df_annotation.loc[ix, 'speaker']
 
@@ -168,15 +169,16 @@ class DataLoader(object):
 			seq,prefix,suffix,spk = self.dataset[ix]
 			batched_input.append(seq)
 			prefixes.append(prefix)
-			suffixes.append(suffixes)
+			suffixes.append(suffix)
 			speakers.append(spk)
 			l = seq.size(0)
 			is_offset.append(torch.tensor([0.0]*(l-1)+[1.0]))
-		batched_input = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(batched_input)
-		prefixes = torch.nn.utils.rnn.torch.nn
-		is_offset = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(is_offset)
+		batched_input = torch.nn.utils.rnn.pack_sequence(batched_input)
+		prefixes = torch.nn.utils.rnn.pack_sequence(prefixes)
+		suffixes = torch.nn.utils.rnn.pack_sequence(suffixes)
+		is_offset = torch.nn.utils.rnn.pack_sequence(is_offset)
 		speakers = torch.tensor(speakers)
-		return batched_input, is_offset, speakers, ixs
+		return batched_input, is_offset, prefixes, suffixes, speakers, ixs
 
 	def get_num_batches(self):
 		return len(self.batch_sampler)

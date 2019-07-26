@@ -39,7 +39,7 @@ class Encoder(learning.Learner):
 			parameter_ix2name = {}
 		dataloader = data_utils.DataLoader(dataset, batch_size=batch_size)
 		encoded = []
-		for data, _, _, ix_in_list in dataloader:
+		for data, _, _, _, _, ix_in_list in dataloader:
 			params = self.encode(data, is_packed=True, to_numpy=to_numpy)
 			for parameter_ix,p in enumerate(params):
 				if parameter_ix in parameter_ix2name:
