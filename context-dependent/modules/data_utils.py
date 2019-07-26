@@ -47,14 +47,14 @@ class Data_Parser(object):
 
 
 class Dataset(torch.utils.data.Dataset):
-	def __init__(self, df_annotation, input_root, transform = None, channel=0):
+	def __init__(self, df_annotation, input_root, transform = None, channel=0, context_length_in_sec=1.0):
 		self.df_annotation = df_annotation
 		self.input_root = input_root
 		self.transform = transform
 		self.channel = channel
-		self.get_discrete_bounds()
+		self.get_discrete_bounds(context_length_in_sec)
 
-	def get_discrete_bounds(self):
+	def get_discrete_bounds(self, context_length_in_sec):
 		self.max_abs = 0.0
 		for input_path,sub_df in self.df_annotation.groupby('input_path'):
 			fs, _ = spw.read(os.path.join(self.input_root, input_path))
@@ -65,6 +65,7 @@ class Dataset(torch.utils.data.Dataset):
 		self.df_annotation.loc[:, 'onset_ix'] = self.df_annotation.loc[:, 'onset_ix'].astype(int)
 		self.df_annotation.loc[:, 'offset_ix'] = self.df_annotation.loc[:, 'offset_ix'].astype(int)
 		self.df_annotation.loc[:, 'length'] = self.df_annotation.loc[:, 'offset_ix'] - self.df_annotation.loc[:, 'onset_ix']
+		self.context_length = np.floor(context_length_in_sec * fs).astype(int)
 
 	def sort_indices_by_length(self, ixs):
 		return self.df_annotation.iloc[ixs,:].sort_values('length', ascending=False).index
@@ -79,13 +80,19 @@ class Dataset(torch.utils.data.Dataset):
 		_, input_data = spw.read(os.path.join(self.input_root, input_path))
 		if input_data.ndim > 1:
 			input_data = input_data[:,self.channel] # Use only one channel.
-		input_data = input_data[self.df_annotation.loc[ix, 'onset_ix']:self.df_annotation.loc[ix, 'offset_ix']].astype(np.float32)
+		onset_ix = self.df_annotation.loc[ix, 'onset_ix']
+		offset_ix = self.df_annotation.loc[ix, 'offset_ix']
+		input_data = input_data[onset_ix:offset_ix].astype(np.float32)
+		prefix = input_data[max(0, onset_ix-self.context_length):onset_ix]
+		suffix = input_data[offset_ix:min(input_data.size, offset_ix*self.context_length)]
 
 		speaker = self.df_annotation.loc[ix, 'speaker']
 
 		if self.transform:
 			input_data = self.transform(input_data)
-		return input_data, speaker
+			prefix = self.transform(prefix)
+			suffix = self.transform(suffix)
+		return input_data, prefix, suffix, speaker
 
 
 class ToTensor(object):
@@ -153,15 +160,20 @@ class DataLoader(object):
 		ixs = self.batches.pop()
 		ixs = self.dataset.sort_indices_by_length(ixs)
 		batched_input = []
+		prefixes = []
+		suffixes = []
 		speakers = []
 		is_offset = []
 		for ix in ixs:
-			seq,spk = self.dataset[ix]
+			seq,prefix,suffix,spk = self.dataset[ix]
 			batched_input.append(seq)
+			prefixes.append(prefix)
+			suffixes.append(suffixes)
 			speakers.append(spk)
 			l = seq.size(0)
 			is_offset.append(torch.tensor([0.0]*(l-1)+[1.0]))
 		batched_input = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(batched_input)
+		prefixes = torch.nn.utils.rnn.torch.nn
 		is_offset = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(is_offset)
 		speakers = torch.tensor(speakers)
 		return batched_input, is_offset, speakers, ixs

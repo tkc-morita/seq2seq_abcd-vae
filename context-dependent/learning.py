@@ -67,7 +67,6 @@ class Learner(object):
 			else:
 				print('CUDA is available. Restart with option -C or --cuda to activate it.')
 
-		self.bce_with_logits_loss = torch.nn.BCEWithLogitsLoss(reduction='sum')
 
 		self.save_dir = save_dir
 
@@ -83,16 +82,13 @@ class Learner(object):
 		else:
 			torch.manual_seed(seed)
 			torch.cuda.manual_seed_all(seed) # According to the docs, "It’s safe to call this function if CUDA is not available; in that case, it is silently ignored."
-			self.feature_distribution = feature_distribution
-			self.emission_distribution =  emission_distribution
-			self.feature_sampler, _, self.kl_func = model.choose_distribution(feature_distribution)
-			emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
 			if encoder_hidden_dropout > 0.0 and encoder_rnn_layers==1:
 				logger.warning('Non-zero dropout cannot be used for the single-layer encoder RNN (because there is no non-top hidden layers).')
 				logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
 				encoder_hidden_dropout = 0.0
-			self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
-			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
+			self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
+			self.feature_sampler = model.Sampler(self.encoder.hidden_size_total, mlp_hidden_size, feature_size, distribution_name=feature_distribution)
+			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_distr_name=emission_distribution, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder, right2left_weight=right2left_decoder_weight, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
 			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
 			logger.info('Features are assumed to be distributed according to {feature_distribution}.'.format(feature_distribution=feature_distribution))
 			logger.info('Conditioned on the features, data are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
@@ -107,11 +103,6 @@ class Learner(object):
 			logger.info("Decoder is bidirectional: {bidirectional_decoder}".format(bidirectional_decoder=bidirectional_decoder))
 			if bidirectional_decoder:
 				logger.info("Probability of emission by the right-to-left decoder: {p}".format(p=right2left_decoder_weight))
-				self.log_left2right_decoder_weight = torch.tensor(1 - right2left_decoder_weight).log().item()
-				self.log_right2left_decoder_weight = torch.tensor(right2left_decoder_weight).log().item()
-			else:
-				self.log_left2right_decoder_weight = 0.0
-				self.log_right2left_decoder_weight = None
 			logger.info("Dropout rate in the non-top layers of the encoder RNN: {do}".format(do=encoder_hidden_dropout))
 			logger.info("Self-feedback to the decoder: {decoder_self_feedback}".format(decoder_self_feedback=decoder_self_feedback))
 			if decoder_self_feedback:
@@ -122,9 +113,10 @@ class Learner(object):
 				logger.info("Speaker ID # is embedded and fed to the decoder.")
 				logger.info("# of speakers: {num_speakers}".format(num_speakers=num_speakers))
 				logger.info("Embedding dimension: {speaker_embed_dim}".format(speaker_embed_dim=speaker_embed_dim))
-			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters())
+			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.feature_sampler.parameters(), self.decoder.parameters())
 
 			self.encoder.to(self.device)
+			self.feature_sampler.to(self.device)
 			self.decoder.to(self.device)
 
 
@@ -135,8 +127,8 @@ class Learner(object):
 		Training phase. Updates weights.
 		"""
 		self.encoder.train() # Turn on training mode which enables dropout.
+		self.feature_sampler.train()
 		self.decoder.train()
-		self.bce_with_logits_loss.train()
 
 		emission_loss = 0
 		end_prediction_loss = 0
@@ -151,16 +143,12 @@ class Learner(object):
 
 			self.optimizer.zero_grad()
 
-			feature_params = self.encoder(packed_input)
-			features = self.feature_sampler(*feature_params)
-			emission_loss_per_batch = []
-			end_prediction_loss_per_batch = []
-			for (emission_params,flatten_offset_prediction,_), log_loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker), (self.log_left2right_decoder_weight, self.log_right2left_decoder_weight)):
-				emission_loss_per_batch += [-self.log_pdf_emission(packed_input.data, *emission_params) + log_loss_weight]
-				end_prediction_loss_per_batch += [self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data) + log_loss_weight]
-			emission_loss_per_batch = torch.stack(emission_loss_per_batch).logsumexp(dim=0)
-			end_prediction_loss_per_batch = torch.stack(end_prediction_loss_per_batch).logsumexp(dim=0)
-			kl_loss_per_batch = self.kl_func(*feature_params)
+			last_hidden = self.encoder(packed_input)
+			feature_params = self.feature_sampler(last_hidden)
+			features = self.feature_sampler.sample(feature_params)
+			kl_loss_per_batch = self.feature_sampler.kl_divergence(feature_params)
+			emission_loss_per_batch, end_prediction_loss_per_batch, _, _, _ = self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker, ground_truth_out=packed_input.data, ground_truth_offset=is_offset.data)
+
 			loss = emission_loss_per_batch + end_prediction_loss_per_batch + kl_loss_per_batch
 			loss /= packed_input.batch_sizes[0]
 			loss.backward()
@@ -192,8 +180,8 @@ class Learner(object):
 		Test/validation phase. No update of weights.
 		"""
 		self.encoder.eval() # Turn on evaluation mode which disables dropout.
+		self.feature_sampler.eval()
 		self.decoder.eval()
-		self.bce_with_logits_loss.eval()
 
 		emission_loss = 0
 		end_prediction_loss = 0
@@ -208,16 +196,13 @@ class Learner(object):
 				is_offset = is_offset.to(self.device)
 				speaker = speaker.to(self.device)
 
-				feature_params = self.encoder(packed_input)
-				features = self.feature_sampler(*feature_params)
-				emission_loss_per_batch = []
-				end_prediction_loss_per_batch = []
-				for (emission_params,flatten_offset_prediction,_), log_loss_weight in zip(self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker), (self.log_left2right_decoder_weight, self.log_right2left_decoder_weight)):
-					emission_loss_per_batch += [-self.log_pdf_emission(packed_input.data, *emission_params) + log_loss_weight]
-					end_prediction_loss_per_batch += [self.bce_with_logits_loss(flatten_offset_prediction, is_offset.data) + log_loss_weight]
-				emission_loss += torch.stack(emission_loss_per_batch).logsumexp(dim=0).item()
-				end_prediction_loss += torch.stack(end_prediction_loss_per_batch).logsumexp(dim=0).item()
-				kl_loss += self.kl_func(*feature_params).item()
+				last_hidden = self.encoder(packed_input)
+				feature_params = self.feature_sampler(last_hidden)
+				features = self.feature_sampler.sample(feature_params)
+				kl_loss += self.feature_sampler.kl_divergence(feature_params).item()
+				emission_loss_per_batch, end_prediction_loss_per_batch, _, _, _ = self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker, ground_truth_out=packed_input.data, ground_truth_offset=is_offset.data)
+				emission_loss += emission_loss_per_batch.item()
+				end_prediction_loss += end_prediction_loss_per_batch.item()
 
 				logger.info('{batch_ix}/{num_batches} validation batches complete.'.format(batch_ix=batch_ix, num_batches=num_batches))
 
@@ -281,37 +266,18 @@ class Learner(object):
 		checkpoint = {
 			'epoch':epoch,
 			'encoder':self.encoder.state_dict(),
+			'encoder_init_parameters':self.encoder.pack_init_parameters(),
+			'feature_sampler':self.feature_sampler.state_dict(),
+			'feature_sampler_init_parameters':self.feature_sampler.pack_init_parameters(),
 			'decoder':self.decoder.state_dict(),
+			'decoder_init_parameters':self.decoder.pack_init_parameters(),
 			'optimizer':self.optimizer.state_dict(),
 			'lr_scheduler':self.lr_scheduler.state_dict(),
 			'gradient_clip':self.gradient_clip,
-			'input_size':self.encoder.rnn.input_size,
-			'encoder_rnn_type':self.encoder.rnn.mode.split('_')[0],
-			'decoder_rnn_type':self.decoder.rnn_cell.mode,
-			'encoder_rnn_hidden_size':self.encoder.rnn.hidden_size,
-			'decoder_rnn_hidden_size':self.decoder.rnn_cell.cell.hidden_size,
-			'encoder_rnn_layers':self.encoder.rnn.num_layers,
-			'bidirectional_encoder':self.encoder.rnn.bidirectional,
-			'bidirectional_decoder':self.decoder.bidirectional,
-			'log_left2right_decoder_weight':self.log_left2right_decoder_weight,
-			'log_right2left_decoder_weight':self.log_right2left_decoder_weight,
-			'encoder_hidden_dropout':self.encoder.rnn.dropout,
-			'decoder_input_dropout':self.decoder.rnn_cell.drop.p,
-			'mlp_hidden_size':self.encoder.to_parameters.mlps[0].hidden_size,
-			'feature_size':self.decoder.feature_size,
-			'feature_distribution':self.feature_distribution,
-			'emission_distribution':self.emission_distribution,
 			'random_state':torch.get_rng_state(),
 		}
 		if torch.cuda.is_available():
 			checkpoint['random_state_cuda'] = torch.cuda.get_rng_state_all()
-		if checkpoint['encoder_rnn_type'] == 'ESN':
-			checkpoint['esn_leak'] = self.encoder.rnn.leak
-		elif checkpoint['decoder_rnn_type'] == 'ESN':
-			checkpoint['esn_leak'] = self.decoder.rnn_cell.cell.leak
-		if not self.decoder.embed_speaker is None:
-			checkpoint['num_speakers'] = self.decoder.embed_speaker.num_embeddings
-			checkpoint['speaker_embed_dim'] = self.decoder.embed_speaker.embedding_dim
 		torch.save(checkpoint, os.path.join(self.save_dir, 'checkpoint.pt'))
 		logger.info('Config successfully saved.')
 
@@ -321,53 +287,17 @@ class Learner(object):
 			checkpoint_path = os.path.join(self.save_dir, 'checkpoint.pt')
 		checkpoint = torch.load(checkpoint_path, map_location='cpu') # Random state needs to be loaded to CPU first even when cuda is available.
 
-		input_size = checkpoint['input_size']
-		encoder_rnn_type = checkpoint['encoder_rnn_type']
-		decoder_rnn_type = checkpoint['decoder_rnn_type']
-		encoder_rnn_hidden_size = checkpoint['encoder_rnn_hidden_size']
-		decoder_rnn_hidden_size = checkpoint['decoder_rnn_hidden_size']
-		encoder_rnn_layers = checkpoint['encoder_rnn_layers']
-		bidirectional_encoder = checkpoint['bidirectional_encoder']
-		if 'bidirectional_decoder' in checkpoint:
-			bidirectional_decoder = checkpoint['bidirectional_decoder']
-		else:
-			bidirectional_decoder = False
-		if 'log_left2right_decoder_weight' in checkpoint:
-			self.log_left2right_decoder_weight = checkpoint['log_left2right_decoder_weight']
-			self.log_right2left_decoder_weight = checkpoint['log_right2left_decoder_weight']
-		else:
-			self.log_left2right_decoder_weight = 0.0
-			self.log_right2left_decoder_weight = None
-		encoder_hidden_dropout = checkpoint['encoder_hidden_dropout']
-		decoder_input_dropout = checkpoint['decoder_input_dropout']
-		feature_size = checkpoint['feature_size']
-		mlp_hidden_size = checkpoint['mlp_hidden_size']
-
-		if encoder_rnn_type == 'ESN' or decoder_rnn_type == 'ESN':
-			esn_leak = checkpoint['esn_leak']
-		else:
-			esn_leak = 1.0
-		if 'num_speakers' in checkpoint:
-			num_speakers = checkpoint['num_speakers']
-			speaker_embed_dim = checkpoint['speaker_embed_dim']
-		else:
-			num_speakers = None
-			speaker_embed_dim = None
-
-		self.feature_distribution = checkpoint['feature_distribution']
-		self.emission_distribution = checkpoint['emission_distribution']
-		self.feature_sampler,_,self.kl_func = model.choose_distribution(self.feature_distribution)
-		emission_sampler,self.log_pdf_emission,_ = model.choose_distribution(self.emission_distribution)
-
-		self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, mlp_hidden_size, feature_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, bidirectional=bidirectional_encoder, hidden_dropout=encoder_hidden_dropout, esn_leak=esn_leak)
-		self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size, emission_sampler, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, esn_leak=esn_leak, bidirectional=bidirectional_decoder, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
+		self.encoder = model.RNN_Variational_Encoder(**checkpoint['encoder_init_parameters'])
+		self.feature_sampler = model.Sampler(**checkpoint['feature_sampler_init_parameters'])
+		self.decoder = model.RNN_Variational_Decoder(**checkpoint['decoder_init_parameters'])
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
 		self.encoder.to(self.device)
+		self.feature_sampler.to(self.device)
 		self.decoder.to(self.device)
 
 
-		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.decoder.parameters())
+		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.feature_sampler.parameters(), self.decoder.parameters())
 		self.optimizer = torch.optim.SGD(self.parameters(), lr=0.1)
 		self.optimizer.load_state_dict(checkpoint['optimizer'])
 
@@ -380,8 +310,6 @@ class Learner(object):
 		if device=='cuda':
 			torch.cuda.set_rng_state_all(checkpoint['random_state_cuda'])
 		return checkpoint['epoch']
-
-
 
 
 

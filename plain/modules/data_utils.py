@@ -161,8 +161,8 @@ class DataLoader(object):
 			speakers.append(spk)
 			l = seq.size(0)
 			is_offset.append(torch.tensor([0.0]*(l-1)+[1.0]))
-		batched_input = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(batched_input)
-		is_offset = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(is_offset)
+		batched_input = torch.nn.utils.rnn.pack_sequence(batched_input)
+		is_offset = torch.nn.utils.rnn.pack_sequence(is_offset)
 		speakers = torch.tensor(speakers)
 		return batched_input, is_offset, speakers, ixs
 
