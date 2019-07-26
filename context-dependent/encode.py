@@ -58,6 +58,7 @@ def get_parameters():
 	par_parser.add_argument('input_root', type=str, help='Path to the root directory under which inputs are located.')
 	par_parser.add_argument('annotation_file', type=str, help='Path to the annotation csv file.')
 	par_parser.add_argument('data_normalizer', type=float, help='Normalizing constant to devide the data.')
+	par_parser.add_argument('context_length', type=float, help='Length of the prefix and suffix sound wave in sec.')
 	par_parser.add_argument('--annotation_sep', type=str, default=',', help='Separator symbol of the annotation file. Comma "," by default (i.e., csv).')
 	par_parser.add_argument('-d', '--device', type=str, default='cpu', help='Computing device.')
 	par_parser.add_argument('-S', '--save_path', type=str, default=None, help='Path to the file where results are saved.')
@@ -95,7 +96,7 @@ if __name__ == '__main__':
 	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
 	log_and_normalize = data_utils.Transform(lambda x: (x + parameters.epsilon).log() / parameters.data_normalizer)
 
-	dataset = data_parser.get_data(transform=Compose([to_tensor,stft,log_and_normalize]), channel=parameters.channel)
+	dataset = data_parser.get_data(transform=Compose([to_tensor,stft,log_and_normalize]), channel=parameters.channel, context_length_in_sec=parameters.context_length)
 
 	if parameters.parameter_names is None:
 		parameter_ix2name = {}
