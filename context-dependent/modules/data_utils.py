@@ -84,8 +84,16 @@ class Dataset(torch.utils.data.Dataset):
 		onset_ix = self.df_annotation.loc[ix, 'onset_ix']
 		offset_ix = self.df_annotation.loc[ix, 'offset_ix']
 		input_data = wave[onset_ix:offset_ix].astype(np.float32)
-		prefix = wave[max(0, onset_ix-self.context_length):onset_ix].astype(np.float32)
-		suffix = wave[offset_ix:min(wave.size, offset_ix+self.context_length)].astype(np.float32)
+		prefix_onset = onset_ix-self.context_length
+		if prefix_onset >= 0:
+			prefix = wave[prefix_onset:onset_ix].astype(np.float32)
+		else:
+			prefix = np.append(np.zeros(-prefix_onset), wave[:onset_ix]).astype(np.float32)
+		suffix_offset = offset_ix+self.context_length
+		if suffix_offset <= wave.size:
+			suffix = wave[offset_ix:suffix_offset].astype(np.float32)
+		else:
+			suffix = np.append(wave[offset_ix:], np.zeros(suffix_offset-wave.size)).astype(np.float32)
 
 		speaker = self.df_annotation.loc[ix, 'speaker']
 
