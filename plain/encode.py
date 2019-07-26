@@ -24,7 +24,7 @@ class Encoder(learning.Learner):
 		if not is_packed:
 			if not isinstance(data, list):
 				data = [data]
-			data = torch.nn.utils.rnn.torch.nn.utils.rnn.pack_sequence(data)
+			data = torch.nn.utils.rnn.pack_sequence(data)
 		with torch.no_grad():
 			data = data.to(self.device)
 			last_hidden = self.encoder(data)
