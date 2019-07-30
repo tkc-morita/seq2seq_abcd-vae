@@ -437,14 +437,15 @@ if __name__ == '__main__':
 	to_tensor = data_utils.ToTensor()
 	if parameters.mfcc:
 		from torchaudio.transforms import MFCC
+		broadcast = data_utils.Transform(lambda x: x.view(1,-1)) # 1st dim for channel
 		mfcc = MFCC(sample_rate=fs, n_mfcc=parameters.num_mfcc, melkwargs={
 				'n_fft':fft_frame_length,
 				'win_length':fft_frame_length,
 				'hop_length':fft_step_size,
 				'window_fn':getattr(torch, parameters.fft_window_type)
 				})
-		normalize = data_utils.Transform(lambda x: x / parameters.data_normalizer)
-		transform = Compose([to_tensor,mfcc,normalize])
+		squeeze_transpose_and_normalize = data_utils.Transform(lambda x: x.squeeze(dim=0).t() / parameters.data_normalizer)
+		transform = Compose([to_tensor,broadcast,mfcc,squeeze_transpose_and_normalize])
 		input_size = parameters.num_mfcc
 	else:
 		stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
