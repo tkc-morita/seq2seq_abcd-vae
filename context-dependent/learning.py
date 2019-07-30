@@ -404,6 +404,8 @@ def get_parameters():
 	par_parser.add_argument('--context_length', type=float, default=1.0, help='Length of the prefix and suffix sound wave in sec.')
 	par_parser.add_argument('-N','--data_normalizer', type=float, default=1.0, help='Normalizing constant to devide the data.')
 	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
+	par_parser.add_argument('--mfcc', action='store_true', help='Use the MFCCs for the input.')
+	par_parser.add_argument('--num_mfcc', type=int, default=20, help='# of MFCCs to use as the input.')
 
 	return par_parser.parse_args()
 
@@ -432,12 +434,30 @@ if __name__ == '__main__':
 	fft_frame_length = int(np.floor(parameters.fft_frame_length * fs))
 	fft_step_size = int(np.floor(parameters.fft_step_size * fs))
 
+	to_tensor = data_utils.ToTensor()
+	if parameters.mfcc:
+		from torchaudio.transforms import MFCC
+		mfcc = MFCC(sample_rate=fs, n_mfcc=parameters.num_mfcc, melkwargs={
+				'n_fft':fft_frame_length,
+				'win_length':fft_frame_length,
+				'hop_length':fft_step_size,
+				'window_fn':getattr(torch, parameters.fft_window_type)
+				})
+		normalize = data_utils.Transform(lambda x: x / parameters.data_normalizer)
+		transform = Compose([to_tensor,mfcc,normalize])
+		input_size = parameters.num_mfcc
+	else:
+		stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
+		log_and_normalize = data_utils.Transform(lambda x: (x + parameters.epsilon).log() / parameters.data_normalizer)
+		transform = Compose([to_tensor,stft,log_and_normalize])
+		input_size = int(fft_frame_length / 2 + 1)
+
 	if parameters.decoder_rnn_type is None:
 		parameters.decoder_rnn_type = parameters.encoder_rnn_type
 
 	# Get a model.
 	learner = Learner(
-				int(fft_frame_length / 2 + 1),
+				input_size,
 				parameters.encoder_rnn_hidden_size,
 				parameters.decoder_rnn_hidden_size,
 				parameters.mlp_hidden_size,
@@ -458,18 +478,18 @@ if __name__ == '__main__':
 				context_feature_size=parameters.context_feature_size,
 				)
 
-	to_tensor = data_utils.ToTensor()
-	stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
-	log_and_normalize = data_utils.Transform(lambda x: (x + parameters.epsilon).log() / parameters.data_normalizer)
-	logger.info("log(abs(STFT(wav))) + {eps}) / {normalizer} will be the input.".format(eps=parameters.epsilon, normalizer=parameters.data_normalizer))
 	logger.info("Sampling frequency of data: {fs}".format(fs=fs))
 	logger.info("STFT window type: {fft_window}".format(fft_window=parameters.fft_window_type))
 	logger.info("STFT frame lengths: {fft_frame_length_in_sec} sec".format(fft_frame_length_in_sec=parameters.fft_frame_length))
 	logger.info("STFT step size: {fft_step_size_in_sec} sec".format(fft_step_size_in_sec=parameters.fft_step_size))
+	if parameters.mfcc:
+		logger.info("{num_mfcc}-dim MFCCs will be the input.".format(num_mfcc=parameters.num_mfcc))
+	else:
+		logger.info("log(abs(STFT(wav))) + {eps}) / {normalizer} will be the input.".format(eps=parameters.epsilon, normalizer=parameters.data_normalizer))
 	logger.info("{context_length} sec before and after the target region are fed to the decoder.".format(context_length=parameters.context_length))
 
-	train_dataset = data_parser.get_data(data_type='train', transform=Compose([to_tensor,stft,log_and_normalize]), channel=parameters.channel, context_length_in_sec=parameters.context_length)
-	valid_dataset = data_parser.get_data(data_type='valid', transform=Compose([to_tensor,stft,log_and_normalize]), channel=parameters.channel, context_length_in_sec=parameters.context_length)
+	train_dataset = data_parser.get_data(data_type='train', transform=transform, channel=parameters.channel, context_length_in_sec=parameters.context_length)
+	valid_dataset = data_parser.get_data(data_type='valid', transform=transform, channel=parameters.channel, context_length_in_sec=parameters.context_length)
 	
 
 	if parameters.validation_batch_size is None:
