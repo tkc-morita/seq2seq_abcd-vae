@@ -336,7 +336,7 @@ class MLP(torch.jit.ScriptModule):
 		return self.whole_network(batched_input)
 
 class ESN(torch.jit.ScriptModule):
-	__constants__ = ['leak']
+	__constants__ = ['leak','hidden_size']
 # class ESN(torch.nn.Module):
 	def __init__(self, input_size, hidden_size, num_layers, dropout=0.0, bidirectional=False, batch_first=True, bias=False, leak=1.0, q=0.95, sparsity=0.1):
 		super(ESN, self).__init__()
@@ -470,7 +470,7 @@ class ESN(torch.jit.ScriptModule):
 		return torch.zeros((batch_size, self.hidden_size), requires_grad=False)
 
 class ESNCell(torch.jit.ScriptModule):
-	__constants__ = ['leak']
+	__constants__ = ['leak','hidden_size']
 # class ESNCell(torch.nn.Module):
 	def __init__(self, input_size, hidden_size, bias=False, leak=1.0, q=0.95, sparsity=0.1):
 		super(ESNCell, self).__init__()
