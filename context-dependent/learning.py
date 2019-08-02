@@ -401,12 +401,12 @@ def get_parameters():
 	par_parser.add_argument('--fft_window_type', type=str, default='hann_window', help='Window type for FFT. "hann_window" by default.')
 	par_parser.add_argument('--fft_no_centering', action='store_true', help='If selected, no centering in FFT.')
 	par_parser.add_argument('--channel', type=int, default=0, help='Channel ID # (starting from 0) of multichannel recordings to use.')
+	par_parser.add_argument('--mfcc', action='store_true', help='Use the MFCCs for the input.')
+	par_parser.add_argument('--num_mfcc', type=int, default=20, help='# of MFCCs to use as the input.')
 	par_parser.add_argument('--context_length', type=float, default=1.0, help='Length of the prefix and suffix sound wave in sec.')
 	par_parser.add_argument('-N','--data_normalizer', type=float, default=1.0, help='Normalizing constant to devide the data.')
 	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
-	par_parser.add_argument('--mfcc', action='store_true', help='Use the MFCCs for the input.')
-	par_parser.add_argument('--num_mfcc', type=int, default=20, help='# of MFCCs to use as the input.')
-
+	
 	return par_parser.parse_args()
 
 
