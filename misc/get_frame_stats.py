@@ -76,7 +76,7 @@ if __name__ == "__main__":
 
 	print('{num_mfcc} MFCCs'.format(num_mfcc=parameters.num_mfcc))
 	broadcast = data_utils.Transform(lambda x: x.view(1,-1)) 
-	mfcc = MFCC(sample_rate=fs, n_mfcc=parameters.num_mfcc, melkwargs={
+	mfcc = MFCC(sample_rate=fs, n_mfcc=parameters.num_mfcc, log_mels=True, melkwargs={
 				'n_fft':fft_frame_length,
 				'win_length':fft_frame_length,
 				'hop_length':fft_step_size,
