@@ -127,10 +127,10 @@ class Learner(object):
 			self.modules += [self.encoder, self.feature_sampler, self.decoder]
 			self.prefix_encoder = None
 			self.suffix_encoder = None
-			self.prefix_frame_decoder = None
+			self.prefix_frame_encoder = None
 			self.prefix_frame_feature_sampler = None
 			self.prefix_frame_decoder = None
-			self.suffix_frame_decoder = None
+			self.suffix_frame_encoder = None
 			self.suffix_frame_feature_sampler = None
 			self.suffix_frame_decoder = None
 			if context_feature_size>0:
