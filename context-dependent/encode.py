@@ -71,7 +71,7 @@ def get_parameters():
 	par_parser.add_argument('--channel', type=int, default=0, help='Channel ID # (starting from 0) of multichannel recordings to use.')
 	par_parser.add_argument('--mfcc', action='store_true', help='Use the MFCCs for the input.')
 	par_parser.add_argument('--num_mfcc', type=int, default=20, help='# of MFCCs to use as the input.')
-	par_parser.add_argument('-p', '--parameter_names', type=str, default=None, help='Comma-separated parameter names.')
+	par_parser.add_argument('-p', '--parameter_names', type=str, default=None, nargs='+', help='Space-separated parameter names.')
 	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
 	par_parser.add_argument('-b', '--batch_size', type=int, default=1, help='Batch size.')
 
@@ -118,7 +118,7 @@ if __name__ == '__main__':
 	if parameters.parameter_names is None:
 		parameter_ix2name = {}
 	else:
-		parameter_ix2name = dict(enumerate(parameters.parameter_names.split(',')))
+		parameter_ix2name = dict(enumerate(parameters.parameter_names))
 	df_encoded = encoder.encode_dataset(dataset, parameter_ix2name=parameter_ix2name, batch_size=parameters.batch_size)
 	df_encoded = df_encoded.sort_values(['data_ix','parameter_name','feature_dim'])
 	if 'label' in data_parser.df_annotation.columns:
