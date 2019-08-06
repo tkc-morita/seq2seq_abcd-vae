@@ -65,8 +65,8 @@ class RNN_Variational_Encoder(torch.nn.Module):
 		last_hidden = last_hidden.transpose(0,1).contiguous().view(last_hidden.size(1), -1)
 		return last_hidden
 
-	def pack_init_parameters(self):
-		parameters = {
+	def pack_init_args(self):
+		init_args = {
 			"input_size": self.rnn.input_size,
 			"rnn_hidden_size": self.rnn.hidden_size,
 			"rnn_type": self.rnn.mode.split('_')[0],
@@ -74,9 +74,9 @@ class RNN_Variational_Encoder(torch.nn.Module):
 			"hidden_dropout": self.rnn.dropout,
 			"bidirectional": self.rnn.bidirectional,
 		}
-		if parameters['rnn_type'] == 'ESN':
-			parameters["esn_leak"] = self.rnn.leak
-		return parameters
+		if init_args['rnn_type'] == 'ESN':
+			init_args["esn_leak"] = self.rnn.leak
+		return init_args
 
 
 # class RNN_Variational_Decoder(torch.jit.ScriptModule):
@@ -123,8 +123,8 @@ class RNN_Variational_Decoder(torch.nn.Module):
 		self.emission_sampler = Sampler(rnn_hidden_size, mlp_hidden_size, output_size, distribution_name=emission_distr_name)
 		self.rnn_cell = RNN_Cell(output_size, rnn_hidden_size, model_type=rnn_type, input_dropout=input_dropout, esn_leak=esn_leak)
 
-	def pack_init_parameters(self):
-		parameters = {
+	def pack_init_args(self):
+		init_args = {
 			"output_size": self.rnn_cell.cell.input_size,
 			"rnn_hidden_size": self.rnn_cell.cell.hidden_size,
 			"mlp_hidden_size": self.offset_predictor.hidden_size,
@@ -135,14 +135,14 @@ class RNN_Variational_Decoder(torch.nn.Module):
 			"input_dropout": self.rnn_cell.drop.p,
 			"bidirectional": self.bidirectional,
 		}
-		if parameters["rnn_type"] == "ESN":
-			parameters["esn_leak"] = self.rnn_cell.cell.leak
+		if init_args["rnn_type"] == "ESN":
+			init_args["esn_leak"] = self.rnn_cell.cell.leak
 		if not self.embed_speaker is None:
-			parameters["num_speakers"] = self.embed_speaker.num_embeddings
-			parameters["speaker_embed_dim"] = self.embed_speaker.embedding_dim
+			init_args["num_speakers"] = self.embed_speaker.num_embeddings
+			init_args["speaker_embed_dim"] = self.embed_speaker.embedding_dim
 		if self.bidirectional:
-			parameters["right2left_weight"] = self.log_right2left_weight.exp().item()
-		return parameters
+			init_args["right2left_weight"] = self.log_right2left_weight.exp().item()
+		return init_args
 
 	def forward(self, features, lengths=None, batch_sizes=None, speaker=None, ground_truth_out=None, ground_truth_offset=None):
 		"""
@@ -548,11 +548,66 @@ class Sampler(torch.nn.Module):
 	def log_pdf(self, samples, parameters):
 		return self._log_pdf(samples, *parameters)
 
-	def pack_init_parameters(self):
-		parameters = {
+	def pack_init_args(self):
+		init_args = {
 			"input_size": self.to_parameters.input_size,
 			"mlp_hidden_size": self.to_parameters.hidden_size,
 			"output_size": self.to_parameters.output_size,
 			"distribution_name": self.distribution_name
 		}
-		return parameters
+		return init_args
+
+
+
+class CNN_Variational_Encoder(torch.nn.Module):
+	def __init__(self, num_layers, stride=2, kernel_size=3):
+		super(CNN_Variational_Encoder, self).__init__()
+		self.stride = stride
+		self.kernel_size = kernel_size
+		self.cnn = torch.nn.Sequential(*[torch.nn.Conv1d(1, 1, kernel_size=kernel_size, stride=stride, padding=kernel_size//2) for l in range(num_layers)])
+
+	def forward(self, x):
+		x = self.cnn(x.view(x.size(0), 1, x.size(1))).view(x.size(0), -1)
+		return x
+
+	def pack_init_args(self):
+		init_args = {
+			"num_layers": len(self.cnn),
+			"stride": self.stride,
+			"kernel_size": self.kernel_size
+		}
+		return init_args
+
+class MLP_Variational_Decoder(torch.nn.Module):
+	def __init__(self, output_size, hidden_size, feature_size, emission_distr_name='isotropic_gaussian', num_speakers = None, speaker_embed_dim=None):
+		super(MLP_Variational_Decoder, self).__init__()
+		self.feature_size = feature_size
+		if num_speakers is None or speaker_embed_dim is None:
+			self.embed_speaker is None
+		else:
+			self.embed_speaker = torch.nn.Embedding(num_speakers, speaker_embed_dim)
+			feature_size += speaker_embed_dim
+		self.emission_sampler = Sampler(feature_size, hidden_size, output_size, distribution_name=emission_distr_name)
+
+	def forward(self, features, speaker=None, ground_truth_out=None):
+		if not self.embed_speaker is None:
+			speaker_embedding = self.embed_speaker(speaker)
+			features = torch.cat([features, speaker_embedding], dim=-1)
+		emission_params = self.emission_sampler(features)
+		if ground_truth_out is None:
+			emission_loss = None
+		else:
+			emission_loss = -self.emission_sampler.log_pdf(ground_truth_out, emission_params)
+		return emission_loss, emission_params
+
+	def pack_init_args(self):
+		init_args = {
+			"output_size": self.emission_sampler.to_parameters.output_size,
+			"hidden_size": self.emission_sampler.to_parameters.hidden_size,
+			"feature_size": self.feature_size, 
+			"emission_distr_name": self.emission_sampler.distribution_name,
+		}
+		if not self.embed_speaker is None:
+			init_args["num_speakers"] = self.embed_speaker.num_embeddings
+			init_args["speaker_embed_dim"] = self.embed_speaker.embedding_dim
+		return init_args

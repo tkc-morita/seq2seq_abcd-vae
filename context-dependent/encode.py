@@ -15,9 +15,7 @@ class Encoder(learning.Learner):
 		self.retrieve_model(checkpoint_path = model_config_path, device=device)
 		for param in self.parameters():
 			param.requires_grad = False
-		self.encoder.eval() # Turn off dropout
-		self.feature_sampler.eval()
-		self.decoder.eval()
+		[m.eval() for m in self.modules]
 
 
 	def encode(self, data, is_packed = False, to_numpy = True):
@@ -27,6 +25,10 @@ class Encoder(learning.Learner):
 			data = torch.nn.utils.rnn.pack_sequence(data)
 		with torch.no_grad():
 			data = data.to(self.device)
+			if not self.frame_encoder is None:
+				cnn_out = self.frame_encoder(data.data)
+				frame_params = self.frame_feature_sampler(cnn_out)
+				data = torch.nn.utils.rnn.PackedSequence(frame_params[0], batch_sizes=data.batch_sizes) # 1st parameter is assumed to be the mean.
 			last_hidden = self.encoder(data)
 			params = self.feature_sampler(last_hidden)
 		if to_numpy:

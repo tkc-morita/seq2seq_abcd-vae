@@ -84,23 +84,28 @@ class Dataset(torch.utils.data.Dataset):
 		onset_ix = self.df_annotation.loc[ix, 'onset_ix']
 		offset_ix = self.df_annotation.loc[ix, 'offset_ix']
 		input_data = wave[onset_ix:offset_ix].astype(np.float32)
-		prefix_onset = onset_ix-self.context_length
-		if prefix_onset >= 0:
-			prefix = wave[prefix_onset:onset_ix].astype(np.float32)
+		if self.context_length>0:
+			prefix_onset = onset_ix-self.context_length
+			if prefix_onset >= 0:
+				prefix = wave[prefix_onset:onset_ix].astype(np.float32)
+			else:
+				prefix = np.append(np.zeros(-prefix_onset), wave[:onset_ix]).astype(np.float32)
+			suffix_offset = offset_ix+self.context_length
+			if suffix_offset <= wave.size:
+				suffix = wave[offset_ix:suffix_offset].astype(np.float32)
+			else:
+				suffix = np.append(wave[offset_ix:], np.zeros(suffix_offset-wave.size)).astype(np.float32)
 		else:
-			prefix = np.append(np.zeros(-prefix_onset), wave[:onset_ix]).astype(np.float32)
-		suffix_offset = offset_ix+self.context_length
-		if suffix_offset <= wave.size:
-			suffix = wave[offset_ix:suffix_offset].astype(np.float32)
-		else:
-			suffix = np.append(wave[offset_ix:], np.zeros(suffix_offset-wave.size)).astype(np.float32)
+			prefix = None
+			suffix = None
 
 		speaker = self.df_annotation.loc[ix, 'speaker']
 
 		if self.transform:
 			input_data = self.transform(input_data)
-			prefix = self.transform(prefix)
-			suffix = self.transform(suffix)
+			if self.context_length>0:
+				prefix = self.transform(prefix)
+				suffix = self.transform(suffix)
 		return input_data, prefix, suffix, speaker
 
 
@@ -182,8 +187,12 @@ class DataLoader(object):
 			l = seq.size(0)
 			is_offset.append(torch.tensor([0.0]*(l-1)+[1.0]))
 		batched_input = torch.nn.utils.rnn.pack_sequence(batched_input)
-		prefixes = torch.nn.utils.rnn.pack_sequence(prefixes)
-		suffixes = torch.nn.utils.rnn.pack_sequence(suffixes)
+		if prefixes[0] is None:
+			prefixes = torch.tensor([])
+			suffixes = torch.tensor([])
+		else:
+			prefixes = torch.nn.utils.rnn.pack_sequence(prefixes)
+			suffixes = torch.nn.utils.rnn.pack_sequence(suffixes)
 		is_offset = torch.nn.utils.rnn.pack_sequence(is_offset)
 		speakers = torch.tensor(speakers)
 		return batched_input, is_offset, prefixes, suffixes, speakers, ixs

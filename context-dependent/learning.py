@@ -58,6 +58,10 @@ class Learner(object):
 			num_speakers=None,
 			speaker_embed_dim=None,
 			context_feature_size=None,
+			frame_embedding=False,
+			frame_feature_size=8,
+			frame_conv_stride=2,
+			frame_conv_kernel_size=3,
 			):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
 		if torch.cuda.is_available():
@@ -87,24 +91,79 @@ class Learner(object):
 				logger.warning('Non-zero dropout cannot be used for the single-layer encoder RNN (because there is no non-top hidden layers).')
 				logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
 				encoder_hidden_dropout = 0.0
-			self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
-			if context_feature_size is None:
-				context_feature_size = feature_size
-			prefix_encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
-			self.prefix_encoder = torch.nn.Sequential(collections.OrderedDict([
-				('rnn', prefix_encoder),
-				('mlp', model.MLP(prefix_encoder.hidden_size_total, mlp_hidden_size, context_feature_size))
-			]))
-			suffix_encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
-			self.suffix_encoder = torch.nn.Sequential(collections.OrderedDict([
-				('rnn', suffix_encoder),
-				('mlp', model.MLP(suffix_encoder.hidden_size_total, mlp_hidden_size, context_feature_size))
-			]))
-			self.feature_sampler = model.Sampler(self.encoder.hidden_size_total, mlp_hidden_size, feature_size, distribution_name=feature_distribution)
-			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size+context_feature_size*2, emission_distr_name=emission_distribution, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder, right2left_weight=right2left_decoder_weight, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
+			self.modules = []
+			if frame_embedding:
+				num_cnn_layers = (input_size // frame_feature_size).bit_length() - 1
+				cnn_last_out_size = input_size
+				padding_size = frame_conv_kernel_size // 2
+				for l in range(num_cnn_layers):
+					cnn_last_out_size = int(np.floor((cnn_last_out_size + 2*padding_size - frame_conv_kernel_size)/frame_conv_stride + 1))
+				self.frame_encoder = model.CNN_Variational_Encoder(num_cnn_layers, stride=frame_conv_stride, kernel_size=frame_conv_kernel_size)
+				self.frame_feature_sampler = model.Sampler(cnn_last_out_size, mlp_hidden_size, frame_feature_size, distribution_name=feature_distribution)
+				self.frame_decoder = model.MLP_Variational_Decoder(input_size, mlp_hidden_size, frame_feature_size, emission_distr_name=emission_distribution, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
+				self.frame_encoder.to(self.device)
+				self.frame_feature_sampler.to(self.device)
+				self.frame_decoder.to(self.device)
+				logger.info('Input frames are embedded into {frame_feature_size}-dim feature space by {num_cnn_layers}-layer CNN and MLP VAE.'.format(frame_feature_size=frame_feature_size, num_cnn_layers=num_cnn_layers))
+				logger.info('CNN stride: {frame_conv_stride}'.format(frame_conv_stride=frame_conv_stride))
+				logger.info('CNN kernel_size: {frame_conv_kernel_size}'.format(frame_conv_kernel_size=frame_conv_kernel_size))
+				self.modules += [self.frame_encoder, self.frame_feature_sampler, self.frame_decoder]
+				rnn_input_size = frame_feature_size
+			else:
+				self.frame_encoder = None
+				self.frame_feature_sampler = None
+				self.frame_decoder = None
+				rnn_input_size = input_size
+			self.encoder = model.RNN_Variational_Encoder(rnn_input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
 			logger.info('Data to be encoded into {feature_size}-dim features.'.format(feature_size=feature_size))
 			logger.info('Features are assumed to be distributed according to {feature_distribution}.'.format(feature_distribution=feature_distribution))
-			logger.info('Prefix and suffix are (deterministically) embedded into {context_feature_size}-dim features.'.format(context_feature_size=context_feature_size))
+			if context_feature_size is None:
+				context_feature_size = feature_size
+			self.feature_sampler = model.Sampler(self.encoder.hidden_size_total, mlp_hidden_size, feature_size, distribution_name=feature_distribution)
+			self.decoder = model.RNN_Variational_Decoder(rnn_input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_size+context_feature_size*2, emission_distr_name=emission_distribution, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder, right2left_weight=right2left_decoder_weight, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
+			self.encoder.to(self.device)
+			self.feature_sampler.to(self.device)
+			self.decoder.to(self.device)
+			self.modules += [self.encoder, self.feature_sampler, self.decoder]
+			self.prefix_encoder = None
+			self.suffix_encoder = None
+			self.prefix_frame_decoder = None
+			self.prefix_frame_feature_sampler = None
+			self.prefix_frame_decoder = None
+			self.suffix_frame_decoder = None
+			self.suffix_frame_feature_sampler = None
+			self.suffix_frame_decoder = None
+			if context_feature_size>0:
+				if frame_embedding:
+					self.prefix_frame_encoder = model.CNN_Variational_Encoder(num_cnn_layers, stride=frame_conv_stride, kernel_size=frame_conv_kernel_size)
+					self.prefix_frame_feature_sampler = model.Sampler(cnn_last_out_size, mlp_hidden_size, frame_feature_size, distribution_name=feature_distribution)
+					self.prefix_frame_decoder = model.MLP_Variational_Decoder(input_size, mlp_hidden_size, frame_feature_size, emission_distr_name=emission_distribution, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
+					self.prefix_frame_encoder.to(self.device)
+					self.prefix_frame_feature_sampler.to(self.device)
+					self.prefix_frame_decoder.to(self.device)
+					self.modules += [self.prefix_frame_encoder, self.prefix_frame_decoder, self.prefix_frame_feature_sampler]
+
+					self.suffix_frame_encoder = model.CNN_Variational_Encoder(num_cnn_layers, stride=frame_conv_stride, kernel_size=frame_conv_kernel_size)
+					self.suffix_frame_feature_sampler = model.Sampler(cnn_last_out_size, mlp_hidden_size, frame_feature_size, distribution_name=feature_distribution)
+					self.suffix_frame_decoder = model.MLP_Variational_Decoder(input_size, mlp_hidden_size, frame_feature_size, emission_distr_name=emission_distribution, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
+					self.suffix_frame_encoder.to(self.device)
+					self.suffix_frame_feature_sampler.to(self.device)
+					self.suffix_frame_decoder.to(self.device)
+					self.modules += [self.suffix_frame_encoder, self.suffix_frame_decoder, self.suffix_frame_feature_sampler]
+				prefix_encoder = model.RNN_Variational_Encoder(rnn_input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
+				self.prefix_encoder = torch.nn.Sequential(collections.OrderedDict([
+					('rnn', prefix_encoder),
+					('mlp', model.MLP(prefix_encoder.hidden_size_total, mlp_hidden_size, context_feature_size))
+				]))
+				suffix_encoder = model.RNN_Variational_Encoder(rnn_input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
+				self.suffix_encoder = torch.nn.Sequential(collections.OrderedDict([
+					('rnn', suffix_encoder),
+					('mlp', model.MLP(suffix_encoder.hidden_size_total, mlp_hidden_size, context_feature_size))
+				]))
+				self.prefix_encoder.to(self.device)
+				self.suffix_encoder.to(self.device)
+				logger.info('Prefix and suffix to the target interval are (deterministically) embedded into {context_feature_size}-dim features.'.format(context_feature_size=context_feature_size))
+				self.modules += [self.prefix_encoder, self.suffix_encoder]
 			logger.info('Conditioned on the features, data are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
 			logger.info('Random seed: {seed}'.format(seed = seed))
 			logger.info('Type of RNN used for the encoder: {rnn_type}'.format(rnn_type=encoder_rnn_type))
@@ -124,16 +183,11 @@ class Learner(object):
 			if encoder_rnn_type == 'ESN' or decoder_rnn_type == 'ESN':
 				logger.info('ESN leak: {leak}'.format(leak=esn_leak))
 			if not speaker_embed_dim is None:
-				logger.info("Speaker ID # is embedded and fed to the decoder.")
+				logger.info("Speaker ID # is embedded and fed to the decoder(s).")
 				logger.info("# of speakers: {num_speakers}".format(num_speakers=num_speakers))
 				logger.info("Embedding dimension: {speaker_embed_dim}".format(speaker_embed_dim=speaker_embed_dim))
-			self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.prefix_encoder.parameters(), self.suffix_encoder.parameters(), self.feature_sampler.parameters(), self.decoder.parameters())
+			self.parameters = lambda:itertools.chain(*[m.parameters() for m in self.modules])
 
-			self.encoder.to(self.device)
-			self.prefix_encoder.to(self.device)
-			self.suffix_encoder.to(self.device)
-			self.feature_sampler.to(self.device)
-			self.decoder.to(self.device)
 
 
 
@@ -142,11 +196,7 @@ class Learner(object):
 		"""
 		Training phase. Updates weights.
 		"""
-		self.encoder.train() # Turn on training mode which enables dropout.
-		self.prefix_encoder.train()
-		self.suffix_encoder.train()
-		self.feature_sampler.train()
-		self.decoder.train()
+		[m.train() for m in self.modules] # Turn on training mode which enables dropout.
 
 		emission_loss = 0
 		end_prediction_loss = 0
@@ -163,14 +213,49 @@ class Learner(object):
 
 			self.optimizer.zero_grad()
 
+			if not self.frame_encoder is None:
+				cnn_out = self.frame_encoder(packed_input.data)
+				frame_feature_params = self.frame_feature_sampler(cnn_out)
+				frame_features = self.frame_feature_sampler.sample(frame_feature_params)
+				kl_loss_per_batch = self.frame_feature_sampler.kl_divergence(frame_feature_params)
+				speaker_per_frame = torch.cat([speaker[:bs] for bs in packed_input.batch_sizes])
+				frame_emission_loss,_ = self.frame_decoder(frame_features, speaker=speaker_per_frame, ground_truth_out=packed_input.data)
+				packed_input = torch.nn.utils.rnn.PackedSequence(frame_features, packed_input.batch_sizes) # Unrecomendded instantiation
+				# packed_input = torch.nn.utils.rnn.pack_sequence([[frame_features[packed_input.batch_sizes[:t].sum()+b] for t,bs in enumerate(packed_input.batch_sizes) if bs>b] for b in range(packed_input.batch_sizes[0])]) # Alternative way of building the packed sequence.
+			else:
+				kl_loss_per_batch = 0.0
+				frame_emission_loss = 0.0
+
 			last_hidden = self.encoder(packed_input)
 			feature_params = self.feature_sampler(last_hidden)
 			features = self.feature_sampler.sample(feature_params)
-			prefix_features = self.prefix_encoder(packed_prefix)
-			suffix_features = self.suffix_encoder(packed_suffix)
-			features = torch.cat([features, prefix_features, suffix_features], dim=-1) # This concat order is arbitrary.
-			kl_loss_per_batch = self.feature_sampler.kl_divergence(feature_params)
+			if not self.prefix_encoder is None:
+				if not self.prefix_frame_encoder is None:
+					# Embed prefix frames
+					cnn_out = self.prefix_frame_encoder(packed_prefix.data)
+					frame_feature_params = self.prefix_frame_feature_sampler(cnn_out)
+					frame_features = self.prefix_frame_feature_sampler.sample(frame_feature_params)
+					kl_loss_per_batch += self.prefix_frame_feature_sampler.kl_divergence(frame_feature_params)
+					speaker_per_frame = torch.cat([speaker[:bs] for bs in packed_prefix.batch_sizes])
+					frame_emission_loss_,_ = self.prefix_frame_decoder(frame_features, speaker=speaker_per_frame, ground_truth_out=packed_prefix.data)
+					frame_emission_loss += frame_emission_loss_
+					packed_prefix = torch.nn.utils.rnn.PackedSequence(frame_features, packed_prefix.batch_sizes) # Unrecomendded instantiation
+
+					# Embed suffix frames
+					cnn_out = self.suffix_frame_encoder(packed_suffix.data)
+					frame_feature_params = self.suffix_frame_feature_sampler(cnn_out)
+					frame_features = self.suffix_frame_feature_sampler.sample(frame_feature_params)
+					kl_loss_per_batch += self.suffix_frame_feature_sampler.kl_divergence(frame_feature_params)
+					speaker_per_frame = torch.cat([speaker[:bs] for bs in packed_suffix.batch_sizes])
+					frame_emission_loss_,_ = self.suffix_frame_decoder(frame_features, speaker=speaker_per_frame, ground_truth_out=packed_suffix.data)
+					frame_emission_loss += frame_emission_loss_
+					packed_suffix = torch.nn.utils.rnn.PackedSequence(frame_features, packed_suffix.batch_sizes) # Unrecomendded instantiation
+				prefix_features = self.prefix_encoder(packed_prefix)
+				suffix_features = self.suffix_encoder(packed_suffix)
+				features = torch.cat([features, prefix_features, suffix_features], dim=-1) # This concat order is arbitrary.
+			kl_loss_per_batch += self.feature_sampler.kl_divergence(feature_params)
 			emission_loss_per_batch, end_prediction_loss_per_batch, _, _, _ = self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker, ground_truth_out=packed_input.data, ground_truth_offset=is_offset.data)
+			emission_loss_per_batch += frame_emission_loss
 
 			loss = emission_loss_per_batch + end_prediction_loss_per_batch + kl_loss_per_batch
 			loss /= packed_input.batch_sizes[0]
@@ -202,11 +287,7 @@ class Learner(object):
 		"""
 		Test/validation phase. No update of weights.
 		"""
-		self.encoder.eval() # Turn on evaluation mode which disables dropout.
-		self.prefix_encoder.eval()
-		self.suffix_encoder.eval()
-		self.feature_sampler.eval()
-		self.decoder.eval()
+		[m.eval() for m in self.modules] # Turn on evaluation mode which disables dropout.
 
 		emission_loss = 0
 		end_prediction_loss = 0
@@ -223,12 +304,44 @@ class Learner(object):
 				packed_suffix = packed_suffix.to(self.device)
 				speaker = speaker.to(self.device)
 
+				if not self.frame_encoder is None:
+					cnn_out = self.frame_encoder(packed_input.data)
+					frame_feature_params = self.frame_feature_sampler(cnn_out)
+					frame_features = self.frame_feature_sampler.sample(frame_feature_params)
+					kl_loss += self.frame_feature_sampler.kl_divergence(frame_feature_params).item()
+					speaker_per_frame = torch.cat([speaker[:bs] for bs in packed_input.batch_sizes])
+					frame_emission_loss,_ = self.frame_decoder(frame_features, speaker=speaker_per_frame, ground_truth_out=packed_input.data)
+					emission_loss += frame_emission_loss.item()
+					packed_input = torch.nn.utils.rnn.PackedSequence(frame_features, packed_input.batch_sizes) # Unrecomendded instantiation
+					# packed_input = torch.nn.utils.rnn.pack_sequence([[frame_features[packed_input.batch_sizes[:t].sum()+b] for t,bs in enumerate(packed_input.batch_sizes) if bs>b] for b in range(packed_input.batch_sizes[0])]) # Alternative way of building the packed sequence.
+
 				last_hidden = self.encoder(packed_input)
 				feature_params = self.feature_sampler(last_hidden)
 				features = self.feature_sampler.sample(feature_params)
-				prefix_features = self.prefix_encoder(packed_prefix)
-				suffix_features = self.suffix_encoder(packed_suffix)
-				features = torch.cat([features, prefix_features, suffix_features], dim=-1) # This concat order is arbitrary.
+				if not self.prefix_encoder is None:
+					if not self.prefix_frame_encoder is None:
+						# Embed prefix frames
+						cnn_out = self.prefix_frame_encoder(packed_prefix.data)
+						frame_feature_params = self.prefix_frame_feature_sampler(cnn_out)
+						frame_features = self.prefix_frame_feature_sampler.sample(frame_feature_params)
+						kl_loss += self.prefix_frame_feature_sampler.kl_divergence(frame_feature_params).item()
+						speaker_per_frame = torch.cat([speaker[:bs] for bs in packed_prefix.batch_sizes])
+						frame_emission_loss_,_ = self.prefix_frame_decoder(frame_features, speaker=speaker_per_frame, ground_truth_out=packed_prefix.data)
+						emission_loss += frame_emission_loss_.item()
+						packed_prefix = torch.nn.utils.rnn.PackedSequence(frame_features, packed_prefix.batch_sizes) # Unrecomendded instantiation
+
+						# Embed suffix frames
+						cnn_out = self.suffix_frame_encoder(packed_suffix.data)
+						frame_feature_params = self.suffix_frame_feature_sampler(cnn_out)
+						frame_features = self.suffix_frame_feature_sampler.sample(frame_feature_params)
+						kl_loss += self.suffix_frame_feature_sampler.kl_divergence(frame_feature_params).item()
+						speaker_per_frame = torch.cat([speaker[:bs] for bs in packed_suffix.batch_sizes])
+						frame_emission_loss_,_ = self.suffix_frame_decoder(frame_features, speaker=speaker_per_frame, ground_truth_out=packed_suffix.data)
+						emission_loss += frame_emission_loss_.item()
+						packed_suffix = torch.nn.utils.rnn.PackedSequence(frame_features, packed_suffix.batch_sizes) # Unrecomendded instantiation
+					prefix_features = self.prefix_encoder(packed_prefix)
+					suffix_features = self.suffix_encoder(packed_suffix)
+					features = torch.cat([features, prefix_features, suffix_features], dim=-1) # This concat order is arbitrary.
 				kl_loss += self.feature_sampler.kl_divergence(feature_params).item()
 				emission_loss_per_batch, end_prediction_loss_per_batch, _, _, _ = self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker, ground_truth_out=packed_input.data, ground_truth_offset=is_offset.data)
 				emission_loss += emission_loss_per_batch.item()
@@ -296,20 +409,42 @@ class Learner(object):
 		checkpoint = {
 			'epoch':epoch,
 			'encoder':self.encoder.state_dict(),
-			'encoder_init_parameters':self.encoder.pack_init_parameters(),
-			'prefix_encoder':self.prefix_encoder.state_dict(),
-			'prefix_encoder_init_parameters':self.prefix_encoder.rnn.pack_init_parameters(),
-			'suffix_encoder':self.suffix_encoder.state_dict(),
-			'suffix_encoder_init_parameters':self.suffix_encoder.rnn.pack_init_parameters(),
+			'encoder_init_args':self.encoder.pack_init_args(),
 			'feature_sampler':self.feature_sampler.state_dict(),
-			'feature_sampler_init_parameters':self.feature_sampler.pack_init_parameters(),
+			'feature_sampler_init_args':self.feature_sampler.pack_init_args(),
 			'decoder':self.decoder.state_dict(),
-			'decoder_init_parameters':self.decoder.pack_init_parameters(),
+			'decoder_init_args':self.decoder.pack_init_args(),
 			'optimizer':self.optimizer.state_dict(),
 			'lr_scheduler':self.lr_scheduler.state_dict(),
 			'gradient_clip':self.gradient_clip,
 			'random_state':torch.get_rng_state(),
 		}
+		if not self.prefix_encoder is None:
+			checkpoint['prefix_encoder'] = self.prefix_encoder.state_dict()
+			checkpoint['prefix_encoder_init_args'] = self.prefix_encoder.rnn.pack_init_args()
+			checkpoint['suffix_encoder'] = self.suffix_encoder.state_dict()
+			checkpoint['suffix_encoder_init_args'] = self.suffix_encoder.rnn.pack_init_args()
+			if not self.prefix_frame_encoder is None:
+				checkpoint['prefix_frame_encoder'] = self.prefix_frame_encoder.state_dict()
+				checkpoint['prefix_frame_encoder_init_args'] = self.prefix_frame_encoder.pack_init_args()
+				checkpoint['prefix_frame_feature_sampler'] = self.prefix_frame_feature_sampler.state_dict()
+				checkpoint['prefix_frame_feature_sampler_init_args'] = self.prefix_frame_feature_sampler.pack_init_args()
+				checkpoint['prefix_frame_decoder'] = self.prefix_frame_decoder.state_dict()
+				checkpoint['prefix_frame_decoder_init_args'] = self.prefix_frame_decoder.pack_init_args()
+
+				checkpoint['suffix_frame_encoder'] = self.suffix_frame_encoder.state_dict()
+				checkpoint['suffix_frame_encoder_init_args'] = self.suffix_frame_encoder.pack_init_args()
+				checkpoint['suffix_frame_feature_sampler'] = self.suffix_frame_feature_sampler.state_dict()
+				checkpoint['suffix_frame_feature_sampler_init_args'] = self.suffix_frame_feature_sampler.pack_init_args()
+				checkpoint['suffix_frame_decoder'] = self.suffix_frame_decoder.state_dict()
+				checkpoint['suffix_frame_decoder_init_args'] = self.suffix_frame_decoder.pack_init_args()
+		if not self.frame_encoder is None:
+			checkpoint['frame_encoder'] = self.frame_encoder.state_dict()
+			checkpoint['frame_encoder_init_args'] = self.frame_encoder.pack_init_args()
+			checkpoint['frame_feature_sampler'] = self.frame_feature_sampler.state_dict()
+			checkpoint['frame_feature_sampler_init_args'] = self.frame_feature_sampler.pack_init_args()
+			checkpoint['frame_decoder'] = self.frame_decoder.state_dict()
+			checkpoint['frame_decoder_init_args'] = self.frame_decoder.pack_init_args()
 		if torch.cuda.is_available():
 			checkpoint['random_state_cuda'] = torch.cuda.get_rng_state_all()
 		torch.save(checkpoint, os.path.join(self.save_dir, 'checkpoint.pt'))
@@ -321,34 +456,89 @@ class Learner(object):
 			checkpoint_path = os.path.join(self.save_dir, 'checkpoint.pt')
 		checkpoint = torch.load(checkpoint_path, map_location='cpu') # Random state needs to be loaded to CPU first even when cuda is available.
 
-		self.encoder = model.RNN_Variational_Encoder(**checkpoint['encoder_init_parameters'])
-		mlp_hidden_size = checkpoint['decoder_init_parameters']['mlp_hidden_size']
-		context_feature_size = (checkpoint['decoder_init_parameters']['feature_size'] - checkpoint['feature_sampler_init_parameters']['output_size']) // 2
-		prefix_encoder = model.RNN_Variational_Encoder(**checkpoint['prefix_encoder_init_parameters'])
-		self.prefix_encoder = torch.nn.Sequential(collections.OrderedDict([
-			('rnn', prefix_encoder),
-			('mlp', model.MLP(prefix_encoder.hidden_size_total, mlp_hidden_size, context_feature_size))
-		]))
-		suffix_encoder = model.RNN_Variational_Encoder(**checkpoint['suffix_encoder_init_parameters'])
-		self.suffix_encoder = torch.nn.Sequential(collections.OrderedDict([
-			('rnn', suffix_encoder),
-			('mlp', model.MLP(suffix_encoder.hidden_size_total, mlp_hidden_size, context_feature_size))
-		]))
-		self.feature_sampler = model.Sampler(**checkpoint['feature_sampler_init_parameters'])
-		self.decoder = model.RNN_Variational_Decoder(**checkpoint['decoder_init_parameters'])
+		for key,value in checkpoint.items():
+			if 'init_parameters' in key:
+				new_key = key.replace('init_parameters', 'init_args')
+				checkpoint[new_key] = value
+
+		self.encoder = model.RNN_Variational_Encoder(**checkpoint['encoder_init_args'])
+		self.feature_sampler = model.Sampler(**checkpoint['feature_sampler_init_args'])
+		self.decoder = model.RNN_Variational_Decoder(**checkpoint['decoder_init_args'])
 		self.encoder.load_state_dict(checkpoint['encoder'])
-		self.prefix_encoder.load_state_dict(checkpoint['prefix_encoder'])
-		self.suffix_encoder.load_state_dict(checkpoint['suffix_encoder'])
 		self.feature_sampler.load_state_dict(checkpoint['feature_sampler'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
 		self.encoder.to(self.device)
-		self.prefix_encoder.to(self.device)
-		self.suffix_encoder.to(self.device)
 		self.feature_sampler.to(self.device)
 		self.decoder.to(self.device)
+		self.modules = [self.encoder, self.feature_sampler, self.decoder]
 
+		self.frame_encoder = None
+		self.frame_feature_sampler = None
+		self.frame_decoder = None
+		if 'frame_encoder' in checkpoint:
+			self.frame_encoder = model.CNN_Variational_Encoder(**checkpoint['frame_encoder_init_args'])
+			self.frame_feature_sampler = model.Sampler(**checkpoint['frame_feature_sampler_init_args'])
+			self.frame_decoder = model.MLP_Variational_Decoder(**checkpoint['frame_decoder_init_args'])
+			self.frame_encoder.load_state_dict(checkpoint['frame_encoder'])
+			self.frame_feature_sampler.load_state_dict(checkpoint['frame_feature_sampler'])
+			self.frame_decoder.load_state_dict(checkpoint['frame_decoder'])
+			self.frame_encoder.to(self.device)
+			self.frame_feature_sampler.to(self.device)
+			self.frame_decoder.to(self.device)
+			self.modules += [self.frame_encoder, self.frame_feature_sampler, self.frame_decoder]
+			
 
-		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.prefix_encoder.parameters(), self.suffix_encoder.parameters(), self.feature_sampler.parameters(), self.decoder.parameters())
+		self.prefix_encoder = None
+		self.suffix_encoder = None
+		self.prefix_frame_encoder = None
+		self.prefix_frame_feature_sampler = None
+		self.prefix_frame_decoder = None
+		self.suffix_frame_encoder = None
+		self.suffix_frame_feature_sampler = None
+		self.suffix_frame_decoder = None
+		if 'prefix_encoder' in checkpoint:
+			mlp_hidden_size = checkpoint['decoder_init_args']['mlp_hidden_size']
+			context_feature_size = (checkpoint['decoder_init_args']['feature_size'] - checkpoint['feature_sampler_init_args']['output_size']) // 2
+			prefix_encoder = model.RNN_Variational_Encoder(**checkpoint['prefix_encoder_init_args'])
+			self.prefix_encoder = torch.nn.Sequential(collections.OrderedDict([
+				('rnn', prefix_encoder),
+				('mlp', model.MLP(prefix_encoder.hidden_size_total, mlp_hidden_size, context_feature_size))
+			]))
+			suffix_encoder = model.RNN_Variational_Encoder(**checkpoint['suffix_encoder_init_args'])
+			self.suffix_encoder = torch.nn.Sequential(collections.OrderedDict([
+				('rnn', suffix_encoder),
+				('mlp', model.MLP(suffix_encoder.hidden_size_total, mlp_hidden_size, context_feature_size))
+			]))
+			self.prefix_encoder.load_state_dict(checkpoint['prefix_encoder'])
+			self.suffix_encoder.load_state_dict(checkpoint['suffix_encoder'])
+			self.prefix_encoder.to(self.device)
+			self.suffix_encoder.to(self.device)
+			self.modules += [self.prefix_encoder, self.suffix_encoder]
+			if 'prefix_frame_encoder' in checkpoint:
+				self.prefix_frame_encoder = model.CNN_Variational_Encoder(**checkpoint['prefix_frame_encoder_init_args'])
+				self.prefix_frame_feature_sampler = model.Sampler(**checkpoint['prefix_frame_feature_sampler_init_args'])
+				self.prefix_frame_decoder = model.MLP_Variational_Decoder(**checkpoint['prefix_frame_decoder_init_args'])
+				self.prefix_frame_encoder.load_state_dict(checkpoint['prefix_frame_encoder'])
+				self.prefix_frame_feature_sampler.load_state_dict(checkpoint['prefix_frame_feature_sampler'])
+				self.prefix_frame_decoder.load_state_dict(checkpoint['prefix_frame_decoder'])
+				self.prefix_frame_encoder.to(self.device)
+				self.prefix_frame_feature_sampler.to(self.device)
+				self.prefix_frame_decoder.to(self.device)
+				self.modules += [self.prefix_frame_encoder, self.prefix_frame_feature_sampler, self.prefix_frame_decoder]
+
+				self.suffix_frame_encoder = model.CNN_Variational_Encoder(**checkpoint['suffix_frame_encoder_init_args'])
+				self.suffix_frame_feature_sampler = model.Sampler(**checkpoint['suffix_frame_feature_sampler_init_args'])
+				self.suffix_frame_decoder = model.MLP_Variational_Decoder(**checkpoint['suffix_frame_decoder_init_args'])
+				self.suffix_frame_encoder.load_state_dict(checkpoint['suffix_frame_encoder'])
+				self.suffix_frame_feature_sampler.load_state_dict(checkpoint['suffix_frame_feature_sampler'])
+				self.suffix_frame_decoder.load_state_dict(checkpoint['suffix_frame_decoder'])
+				self.suffix_frame_encoder.to(self.device)
+				self.suffix_frame_feature_sampler.to(self.device)
+				self.suffix_frame_decoder.to(self.device)
+				self.modules += [self.suffix_frame_encoder, self.suffix_frame_feature_sampler, self.suffix_frame_decoder]
+
+		self.parameters = lambda:itertools.chain(*[m.parameters() for m in self.modules])
+
 		self.optimizer = torch.optim.SGD(self.parameters(), lr=0.1)
 		self.optimizer.load_state_dict(checkpoint['optimizer'])
 
@@ -403,7 +593,11 @@ def get_parameters():
 	par_parser.add_argument('--channel', type=int, default=0, help='Channel ID # (starting from 0) of multichannel recordings to use.')
 	par_parser.add_argument('--mfcc', action='store_true', help='Use the MFCCs for the input.')
 	par_parser.add_argument('--num_mfcc', type=int, default=20, help='# of MFCCs to use as the input.')
-	par_parser.add_argument('--context_length', type=float, default=1.0, help='Length of the prefix and suffix sound wave in sec.')
+	par_parser.add_argument('--frame_embedding', action='store_true', help='If selected, embed each FFT frame into an arbitrary size by CNN.')
+	par_parser.add_argument('--frame_feature_size', type=int, default=8, help='The size of the embedded FFT frame.')
+	par_parser.add_argument('--frame_conv_stride', type=int, default=2, help='Stride of the frame convolution per layer.')
+	par_parser.add_argument('--frame_conv_kernel_size', type=int, default=3, help='Kernel size of the frame convolution per layer.')
+	par_parser.add_argument('--context_length', type=float, default=0.0, help='Length of the prefix and suffix sound wave in sec.')
 	par_parser.add_argument('-N','--data_normalizer', type=float, default=1.0, help='Normalizing constant to devide the data.')
 	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
 	
@@ -456,6 +650,9 @@ if __name__ == '__main__':
 	if parameters.decoder_rnn_type is None:
 		parameters.decoder_rnn_type = parameters.encoder_rnn_type
 
+	if parameters.context_length <= 0.0:
+		parameters.context_feature_size = 0
+
 	# Get a model.
 	learner = Learner(
 				input_size,
@@ -477,6 +674,10 @@ if __name__ == '__main__':
 				num_speakers=num_speakers,
 				speaker_embed_dim=parameters.speaker_embed_dim,
 				context_feature_size=parameters.context_feature_size,
+				frame_embedding=parameters.frame_embedding,
+				frame_feature_size=parameters.frame_feature_size,
+				frame_conv_stride=parameters.frame_conv_stride,
+				frame_conv_kernel_size=parameters.frame_conv_kernel_size
 				)
 
 	logger.info("Sampling frequency of data: {fs}".format(fs=fs))
@@ -487,7 +688,10 @@ if __name__ == '__main__':
 		logger.info("{num_mfcc}-dim MFCCs will be the input.".format(num_mfcc=parameters.num_mfcc))
 	else:
 		logger.info("log(abs(STFT(wav))) + {eps}) / {normalizer} will be the input.".format(eps=parameters.epsilon, normalizer=parameters.data_normalizer))
-	logger.info("{context_length} sec before and after the target region are fed to the decoder.".format(context_length=parameters.context_length))
+	if parameters.context_length>0:
+		logger.info("{context_length} sec before and after the target region are fed to the decoder.".format(context_length=parameters.context_length))
+	else:
+		logger.info('Decoder does not receive context info around the target interval.')
 
 	train_dataset = data_parser.get_data(data_type='train', transform=transform, channel=parameters.channel, context_length_in_sec=parameters.context_length)
 	valid_dataset = data_parser.get_data(data_type='valid', transform=transform, channel=parameters.channel, context_length_in_sec=parameters.context_length)
