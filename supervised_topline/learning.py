@@ -86,12 +86,14 @@ class Learner(object):
 			assert not (use_input_mean and use_resampling), 'You cannot set both as True.'
 			if use_resampling:
 				self.encoder = model.Resample(num_resampled_frames)
-				classifier_input_size = num_resampled_frames * input_size
+				classifier_input_size = num_resampled_frames * input_size + 1
 				logger.info('Resample the input time series into {} frames.'.format(num_resampled_frames))
+				logger.info('Original sequence length is appended to the input.')
 			elif use_input_mean:
 				self.encoder = model.TakeMean()
-				classifier_input_size = input_size
+				classifier_input_size = input_size + 1
 				logger.info('Take the mean of the input over the time dimension.')
+				logger.info('Original sequence length is appended to the input.')
 			else:
 				self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
 				classifier_input_size = self.encoder.hidden_size_total
