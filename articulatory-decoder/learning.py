@@ -686,7 +686,7 @@ if __name__ == '__main__':
 	
 	freq_step = fs / fft_frame_length
 	f0_lower_ix = int(np.round(parameters.f0_lower_bound / freq_step))
-	f0_upper_ix = int(np.round(parameters.f0_upper_bound / freq_step))+1
+	f0_upper_ix = min(int(np.round(parameters.f0_upper_bound / freq_step))+1, int(fft_frame_length / 2 + 1))
 	if parameters.source_decay>0:
 		parameters.source_decay = -parameters.source_decay
 	# From dB to ln.
