@@ -337,12 +337,16 @@ class Resample(torch.nn.Module):
 		return out
 
 	def resample(self, seq):
-		while seq.size(0)<self.num_samples:
-			new_seq = [torch.stack([t,(t+t_plus_1)/2]) for t,t_plus_1 in zip(seq, seq[1:])]
-			new_seq.append(seq[-1].view((1,)+seq.size()[1:]))
-			seq = torch.cat(new_seq, dim=0)
-		step_size = round(seq.size(0) / self.num_samples)
-		return seq[step_size//2::step_size].contiguous().view(-1)
+		gcd = math.gcd(seq.size(0), self.num_samples)
+		lcm = seq.size(0) * self.num_samples // gcd
+
+		upsample = torch.nn.Upsample(size=lcm, mode='linear', align_corners=False)
+		seq = upsample(
+				seq.t().view(1,seq.size(1),seq.size(0))
+				).view(seq.size(1),-1).t()
+
+		step_size = seq.size(0) // self.num_samples
+		return seq[::step_size].contiguous().view(-1)
 
 	def pack_init_args(self):
 		return {'num_samples':self.num_samples}
