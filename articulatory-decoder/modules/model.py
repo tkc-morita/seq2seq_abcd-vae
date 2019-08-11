@@ -696,10 +696,18 @@ class ArticulatorySampler(torch.nn.Module):
 		self._sampler, self._log_pdf, _, _ = choose_distribution(noise_distribution)
 
 	def forward(self, f0_seed, loudness_seed, filter_seed, noise_seed):
-		source = self.get_source(f0_seed, loudness_seed)
+		loudness = self.to_loudness(loudness_seed) # In log space.
 		filter_ = self.get_filter(filter_seed)
+
+		voices = (loudness.view(-1,1,1)
+					+ filter_.view(filter_.size(0),1,filter_.size(1))
+					) * self.is_harmonics + self.decays
+		voices = self.relu(voices - self.silence) + self.silence
+
+		f0_odds = self.to_f0_odds(f0_seed)
+		mean_voice = (f0_odds.view(f0_odds.size()+(1,)) * voices).sum(dim=1)
+
 		noise_log_var = self.to_noise_log_var(noise_seed)
-		mean_voice = source + filter_ # in log space
 		sampled_voice = self._sampler(mean_voice, noise_log_var)
 		return sampled_voice, (mean_voice, noise_log_var)
 
@@ -719,26 +727,12 @@ class ArticulatorySampler(torch.nn.Module):
 		decays = decays + (1-is_harmonics) * self.silence
 		self.register_parameter(
 			'decays',
-			torch.nn.Parameter(decays, requires_grad=False)
+			torch.nn.Parameter(decays.view((1,)+decays.size()), requires_grad=False)
 		)
 		self.register_parameter(
 			'is_harmonics',
-			torch.nn.Parameter(is_harmonics, requires_grad=False)
+			torch.nn.Parameter(is_harmonics.view((1,)+is_harmonics.size()), requires_grad=False)
 		)
-
-
-
-	def get_source(self, f0_seed, loudness_seed):
-		f0_odds = self.to_f0_odds(f0_seed)
-	
-		loudness = self.to_loudness(loudness_seed) # In log space.
-		decays = (self.is_harmonics.view((1,)+self.is_harmonics.size())
-					* loudness.view(-1,1,1)
-					) + self.decays
-
-		source = (f0_odds.view(f0_odds.size()+(1,)) * decays).sum(dim=1)
-		source = self.relu(source - self.silence) + self.silence
-		return source
 
 	def get_filter(self, filter_seed):
 		peaks = self.to_filter_peaks(filter_seed)
