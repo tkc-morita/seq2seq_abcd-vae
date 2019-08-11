@@ -317,3 +317,32 @@ class ESNCell(torch.jit.ScriptModule):
 		return torch.zeros((batch_size, self.hidden_size), requires_grad=False)
 
 
+class TakeMean(torch.nn.Module):
+	def forward(self, packed_input):
+		padded_input, lengths = torch.nn.utils.rnn.pad_packed_sequence(packed_input, batch_first=True)
+		out = torch.stack([seq[:l].mean(dim=0) for seq,l in zip(padded_input,lengths)])
+		return out
+
+	def pack_init_args(self):
+		return {}
+
+class Resample(torch.nn.Module):
+	def __init__(self, num_samples):
+		super(Resample, self).__init__()
+		self.num_samples = num_samples
+		
+	def forward(self, packed_input):
+		padded_input, lengths = torch.nn.utils.rnn.pad_packed_sequence(packed_input, batch_first=True)
+		out = torch.stack([self.resample(seq[:l]) for seq,l in zip(padded_input,lengths)])
+		return out
+
+	def resample(self, seq):
+		while seq.size(0)<self.num_samples:
+			new_seq = [torch.stack([t,(t+t_plus_1)/2]) for t,t_plus_1 in zip(seq, seq[1:])]
+			new_seq.append(seq[-1].view((1,)+seq.size()[1:]))
+			seq = torch.cat(new_seq, dim=0)
+		step_size = round(seq.size(0) / self.num_samples)
+		return seq[step_size//2::step_size].contiguous().view(-1)
+
+	def pack_init_args(self):
+		return {'num_samples':self.num_samples}

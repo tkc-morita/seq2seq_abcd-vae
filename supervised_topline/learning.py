@@ -47,6 +47,9 @@ class Learner(object):
 			device=False,
 			seed=1111,
 			esn_leak=1.0,
+			use_input_mean = False,
+			use_resampling = False,
+			num_resampled_frames = 10,
 			):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
 		if torch.cuda.is_available():
@@ -75,24 +78,35 @@ class Learner(object):
 		else:
 			torch.manual_seed(seed)
 			torch.cuda.manual_seed_all(seed) # According to the docs, "It’s safe to call this function if CUDA is not available; in that case, it is silently ignored."
+			logger.info('Random seed: {seed}'.format(seed = seed))
 			if encoder_hidden_dropout > 0.0 and encoder_rnn_layers==1:
 				logger.warning('Non-zero dropout cannot be used for the single-layer encoder RNN (because there is no non-top hidden layers).')
 				logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
 				encoder_hidden_dropout = 0.0
-			self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
+			assert not (use_input_mean and use_resampling), 'You cannot set both as True.'
+			if use_resampling:
+				self.encoder = model.Resample(num_resampled_frames)
+				classifier_input_size = num_resampled_frames * input_size
+				logger.info('Resample the input time series into {} frames.'.format(num_resampled_frames))
+			elif use_input_mean:
+				self.encoder = model.TakeMean()
+				classifier_input_size = input_size
+				logger.info('Take the mean of the input over the time dimension.')
+			else:
+				self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
+				classifier_input_size = self.encoder.hidden_size_total
+				logger.info('Type of RNN used for the encoder: {rnn_type}'.format(rnn_type=encoder_rnn_type))
+				logger.info("# of RNN hidden layers in the encoder RNN: {hl}".format(hl=encoder_rnn_layers))
+				logger.info("# of hidden units in the encoder RNNs: {hs}".format(hs=encoder_rnn_hidden_size))
+				logger.info("Encoder is bidirectional: {bidirectional_encoder}".format(bidirectional_encoder=bidirectional_encoder))
+				logger.info("Dropout rate in the non-top layers of the encoder RNN: {do}".format(do=encoder_hidden_dropout))
+				if encoder_rnn_type == 'ESN':
+					logger.info('ESN leak: {leak}'.format(leak=esn_leak))
 			self.encoder.to(self.device)
-			self.classifier = model.MLP(self.encoder.hidden_size_total, mlp_hidden_size, num_categories)
+			self.classifier = model.MLP(classifier_input_size, mlp_hidden_size, num_categories)
 			self.classifier.to(self.device)
-			self.modules = [self.encoder, self.classifier]
-			logger.info('Random seed: {seed}'.format(seed = seed))
-			logger.info('Type of RNN used for the encoder: {rnn_type}'.format(rnn_type=encoder_rnn_type))
-			logger.info("# of RNN hidden layers in the encoder RNN: {hl}".format(hl=encoder_rnn_layers))
-			logger.info("# of hidden units in the encoder RNNs: {hs}".format(hs=encoder_rnn_hidden_size))
 			logger.info("# of hidden units in the MLPs: {hs}".format(hs=mlp_hidden_size))
-			logger.info("Encoder is bidirectional: {bidirectional_encoder}".format(bidirectional_encoder=bidirectional_encoder))
-			logger.info("Dropout rate in the non-top layers of the encoder RNN: {do}".format(do=encoder_hidden_dropout))
-			if encoder_rnn_type == 'ESN':
-				logger.info('ESN leak: {leak}'.format(leak=esn_leak))
+			self.modules = [self.encoder, self.classifier]
 			self.parameters = lambda:itertools.chain(*[m.parameters() for m in self.modules])
 
 
@@ -249,7 +263,12 @@ class Learner(object):
 				new_key = key.replace('init_parameters', 'init_args')
 				checkpoint[new_key] = value
 
-		self.encoder = model.RNN_Variational_Encoder(**checkpoint['encoder_init_args'])
+		if 'rnn_type' in checkpoint['encoder_init_args']:
+			self.encoder = model.RNN_Variational_Encoder(**checkpoint['encoder_init_args'])
+		elif 'num_samples' in checkpoint['encoder_init_args']:
+			self.encoder = model.Resample(**checkpoint['encoder_init_args'])
+		else:
+			self.encoder = model.TakeMean()
 		self.encoder.load_state_dict(checkpoint['encoder'])
 		self.encoder.to(self.device)
 		self.classifier = model.MLP(**checkpoint['classifier_init_args'])
@@ -305,6 +324,9 @@ def get_parameters():
 	par_parser.add_argument('--num_mfcc', type=int, default=20, help='# of MFCCs to use as the input.')
 	par_parser.add_argument('-N','--data_normalizer', type=float, default=1.0, help='Normalizing constant to devide the data.')
 	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
+	par_parser.add_argument('--use_input_mean', action='store_true', help='Pass the mean of the input frames over the time dimension to the MLP classifier.')
+	par_parser.add_argument('--use_resampling', action='store_true', help='Resample the input frames and pass them to the MLP classifier.')
+	par_parser.add_argument('--num_resampled_frames', type=int, default=10, help='# of resampled frames to pass to the MLP decoder. Used only if --use_resampling is selected.')
 	
 	return par_parser.parse_args()
 
@@ -363,6 +385,9 @@ if __name__ == '__main__':
 				encoder_hidden_dropout=parameters.encoder_hidden_dropout,
 				device = parameters.device,
 				seed = parameters.seed,
+				use_input_mean = parameters.use_input_mean,
+				use_resampling = parameters.use_resampling,
+				num_resampled_frames = parameters.num_resampled_frames,
 				)
 
 	logger.info("Sampling frequency of data: {fs}".format(fs=fs))
