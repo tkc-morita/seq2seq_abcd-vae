@@ -683,6 +683,14 @@ class ArticulatorySampler(torch.nn.Module):
 		self.to_filter_log_scale = MLP(input_size, mlp_hidden_size, 1)
 		self.to_filter_log_base = MLP(input_size, mlp_hidden_size, 1)
 		self.relu = torch.nn.ReLU()
+		if self.filter_conv_kernel_size > 1:
+			self.register_parameter(
+				'filter_conv_kernel_window',
+				torch.nn.Parameter(
+					torch.ones((1,1,self.filter_conv_kernel_size)),
+					requires_grad=False
+				)
+			)
 		# Noise
 		self.to_noise_log_var = MLP(input_size, mlp_hidden_size, output_size)
 		self._sampler, self._log_pdf, _, _ = choose_distribution(noise_distribution)
@@ -730,7 +738,6 @@ class ArticulatorySampler(torch.nn.Module):
 
 		source = (f0_odds.view(f0_odds.size()+(1,)) * decays).sum(dim=1)
 		source = self.relu(source - self.silence) + self.silence
-		assert (1-torch.isnan(source).any()).item()
 		return source
 
 	def get_filter(self, filter_seed):
@@ -738,7 +745,7 @@ class ArticulatorySampler(torch.nn.Module):
 		if self.filter_conv_kernel_size>1:
 			peaks = torch.nn.functional.conv1d(
 						peaks.view(-1,1,peaks.size(-1)),
-						torch.ones((1,1,self.filter_conv_kernel_size)),
+						self.filter_conv_kernel_window,
 						padding=self.filter_conv_kernel_size//2
 						).view(peaks.size())
 		log_scalar = self.to_filter_log_scale(filter_seed)
