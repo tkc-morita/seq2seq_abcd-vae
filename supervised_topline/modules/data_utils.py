@@ -7,6 +7,7 @@ import numpy as np
 import scipy.io.wavfile as spw
 import os.path
 import warnings
+import parselmouth as psm
 warnings.simplefilter("error")
 
 class Data_Parser(object):
@@ -120,6 +121,35 @@ class STFT(object):
 							0,1 # Make the 0th dim represent time.
 						).contiguous()
 		return transformed
+
+class Formant(object):
+	def __init__(self, fs, frame_length_in_sec, step_size_in_sec, num_formants=2, use_pitch=False):
+		self.fs = fs
+		self.frame_length_in_sec = frame_length_in_sec
+		self.step_size_in_sec = step_size_in_sec
+		self.num_formants = num_formants
+		self.use_pitch = use_pitch
+
+	def __call__(self, wave):
+		snd = psm.Sound(wave, self.fs)
+		fmt = snd.to_formant_burg(time_step=self.step_size_in_sec, window_length=self.frame_length_in_sec)
+		sample_points_in_sec = [fmt.frame_number_to_time(frame_ix+1) for frame_ix in range(fmt.n_frames)]
+		if self.use_pitch:
+			pitch = snd.to_pitch(time_step=self.frame_length_in_sec)
+			return np.array(
+						[
+							[pitch.get_value_at_time(sample_t_in_sec)]
+							+[fmt.get_value_at_time(fmt_ix, sample_t_in_sec)
+							for fmt_ix in range(1,self.num_formants+1)]
+						for sample_t_in_sec in sample_points_in_sec
+						], dtype=np.float32)
+		return np.array(
+					[
+						[fmt.get_value_at_time(fmt_ix, sample_t_in_sec)
+						for fmt_ix in range(1,self.num_formants+1)]
+					for sample_t_in_sec in sample_points_in_sec
+					], dtype=np.float32)
+
 
 class Compose(object):
 	def __init__(self, transforms):

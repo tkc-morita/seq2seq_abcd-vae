@@ -324,6 +324,9 @@ def get_parameters():
 	par_parser.add_argument('--channel', type=int, default=0, help='Channel ID # (starting from 0) of multichannel recordings to use.')
 	par_parser.add_argument('--mfcc', action='store_true', help='Use the MFCCs for the input.')
 	par_parser.add_argument('--num_mfcc', type=int, default=20, help='# of MFCCs to use as the input.')
+	par_parser.add_argument('--formant', action='store_true', help='Use formants as the input.')
+	par_parser.add_argument('--num_formants', type=int, default=2, help='# of formants used.')
+	par_parser.add_argument('--use_pitch', action='store_true', help='If selected, use F0 ("Pitch" in Praat) in addition to higher formants.')
 	par_parser.add_argument('-N','--data_normalizer', type=float, default=1.0, help='Normalizing constant to devide the data.')
 	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
 	par_parser.add_argument('--use_input_mean', action='store_true', help='Pass the mean of the input frames over the time dimension to the MLP classifier.')
@@ -369,6 +372,14 @@ if __name__ == '__main__':
 		squeeze_transpose_and_normalize = data_utils.Transform(lambda x: x.squeeze(dim=0).t() / parameters.data_normalizer)
 		transform = Compose([to_tensor,broadcast,mfcc,squeeze_transpose_and_normalize])
 		input_size = parameters.num_mfcc
+	elif parameters.formant:
+		get_formants = data_utils.Formant(fs, parameters.fft_frame_length, parameters.fft_step_size, num_formants=parameters.num_formants, use_pitch=parameters.use_pitch)
+		nyquist_freq = fs / 2
+		normalize = data_utils.Transform(lambda x: (x / nyquist_freq) - 1.0)
+		transform = Compose([get_formants, to_tensor, normalize])
+		input_size = parameters.num_formants
+		if parameters.use_pitch:
+			input_size += 1
 	else:
 		stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
 		log_and_normalize = data_utils.Transform(lambda x: (x + parameters.epsilon).log() / parameters.data_normalizer)
@@ -398,6 +409,12 @@ if __name__ == '__main__':
 	logger.info("STFT step size: {fft_step_size_in_sec} sec".format(fft_step_size_in_sec=parameters.fft_step_size))
 	if parameters.mfcc:
 		logger.info("{num_mfcc}-dim MFCCs will be the input.".format(num_mfcc=parameters.num_mfcc))
+	elif parameters.formant:
+		if parameters.use_pitch:
+			lowest_formant = 0
+		else:
+			lowest_formant = 1
+		logger.info("F{lowest_formant}-F{highest_formant} will be the input.".format(lowest_formant=lowest_formant, highest_formant=parameters.num_formants))
 	else:
 		logger.info("log(abs(STFT(wav))) + {eps}) / {normalizer} will be the input.".format(eps=parameters.epsilon, normalizer=parameters.data_normalizer))
 
