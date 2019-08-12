@@ -403,25 +403,35 @@ class ESN(torch.jit.ScriptModule):
 			weight_hh /= (eig_val.pow(2).sum(-1)).max().sqrt() / 0.99 # Adjust by the spectral radius.
 
 
-	def forward(self, packed_input, hidden=None):
+	def forward(self, packed_input, h_0=None):
 		flatten_input = packed_input.data
-		last_hidden = torch.tensor([]).to(packed_input.data.device)
-		for l in range(self.num_layers):
-			flatten_hidden, last_hidden_l = self._forward_per_layer(flatten_input, packed_input.batch_sizes, getattr(self, 'weight_ih_l{l}'.format(l=l)), getattr(self, 'weight_hh_l{l}'.format(l=l)))
-			last_hidden = torch.cat([last_hidden, last_hidden_l], dim=0)
+		last_hidden = []
+		if h_0 is None:
+			h_0 = self.init_hidden(packed_input.batch_sizes[0])
 			if self.bidirectional:
-				flatten_hidden_back, last_hidden_l_back = self._forward_per_layer_backward(flatten_input, packed_input.batch_sizes, getattr(self, 'weight_ih_l{l}_reverse'.format(l=l)), getattr(self, 'weight_hh_l{l}_reverse'.format(l=l)))
+				h_0 = torch.cat([
+						h_0,
+						self.init_hidden(packed_input.batch_sizes[0])
+				], dim=0)
+			h_0 = h_0.to(packed_input.data.device)
+		h_0 = h_0.view(-1, self.num_layers, h_0.size(1), h_0.size(2))
+		for l in range(self.num_layers):
+			flatten_hidden, last_hidden_l = self._forward_per_layer(flatten_input, packed_input.batch_sizes, getattr(self, 'weight_ih_l{l}'.format(l=l)), getattr(self, 'weight_hh_l{l}'.format(l=l)), h_0[0,l])
+			last_hidden += [last_hidden_l]
+			if self.bidirectional:
+				flatten_hidden_back, last_hidden_l_back = self._forward_per_layer_backward(flatten_input, packed_input.batch_sizes, getattr(self, 'weight_ih_l{l}_reverse'.format(l=l)), getattr(self, 'weight_hh_l{l}_reverse'.format(l=l)), h_0[1,l])
 				flatten_hidden = torch.cat([flatten_hidden, flatten_hidden_back], dim=-1)
-				last_hidden = torch.cat([last_hidden, last_hidden_l_back], dim=0)
+				last_hidden += [last_hidden_l_back]
 			flatten_input = self.drop(flatten_hidden)
+		last_hidden = torch.cat(last_hidden, dim=0)
 		return flatten_hidden, last_hidden
 
 	@torch.jit.script_method
-	def _forward_per_layer(self, flatten_input, batch_sizes, weight_ih, weight_hh):
+	def _forward_per_layer(self, flatten_input, batch_sizes, weight_ih, weight_hh, h_0):
 		# input2hidden
 		input2hidden_transposed = weight_ih.mm(flatten_input.t())
 		# hidden2hidden
-		hidden_transposed = self.init_hidden(batch_sizes[0]).to(input2hidden_transposed.device).t()
+		hidden_transposed = h_0.t()
 		# flatten_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
 		# last_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
 		flatten_hidden_transposed = []
@@ -443,11 +453,11 @@ class ESN(torch.jit.ScriptModule):
 		last_hidden_transposed = torch.cat(last_hidden_transposed, dim=-1)
 		return flatten_hidden_transposed.t(), last_hidden_transposed.t().view(1,last_hidden_transposed.size(1),last_hidden_transposed.size(0))
 
-	def _forward_per_layer_backward(self, flatten_input, batch_sizes, weight_ih, weight_hh):
+	def _forward_per_layer_backward(self, flatten_input, batch_sizes, weight_ih, weight_hh, h_0):
 		# input2hidden
 		input2hidden_transposed = weight_ih.mm(flatten_input.t())
 		# hidden2hidden
-		init_hidden_fullsize_transposed = self.init_hidden(batch_sizes[0]).to(input2hidden_transposed.device).t()
+		init_hidden_fullsize_transposed = h_0.t()
 		hidden_transposed = init_hidden_fullsize_transposed[:,:batch_sizes[-1]]
 		# flatten_hidden_transposed = torch.tensor([]).to(input2hidden_transposed.device)
 		flatten_hidden_transposed = []
@@ -467,7 +477,7 @@ class ESN(torch.jit.ScriptModule):
 		return flatten_hidden_transposed.t(), hidden_transposed.t().view(1,hidden_transposed.size(1),hidden_transposed.size(0))
 
 	def init_hidden(self, batch_size):
-		return torch.zeros((batch_size, self.hidden_size), requires_grad=False)
+		return torch.zeros((self.num_layers, batch_size, self.hidden_size), requires_grad=False)
 
 class ESNCell(torch.jit.ScriptModule):
 	__constants__ = ['leak','hidden_size']
