@@ -9,7 +9,7 @@ import learning
 import os, argparse, itertools
 
 
-class Encoder(learning.Learner):
+class Predictor(learning.Learner):
 	def __init__(self, model_config_path, device = 'cpu'):
 		self.device = torch.device(device)
 		self.retrieve_model(checkpoint_path = model_config_path, device=device)
@@ -20,7 +20,7 @@ class Encoder(learning.Learner):
 		[m.eval() for m in self.modules]
 
 
-	def encode(self, data, is_packed = False, to_numpy = True):
+	def predict(self, data, is_packed = False, to_numpy = True):
 		if not is_packed:
 			if not isinstance(data, list):
 				data = [data]
@@ -29,23 +29,28 @@ class Encoder(learning.Learner):
 			data = data.to(self.device)
 			last_hidden = self.encoder(data)
 			weights = self.classifier(last_hidden)
-			probs = self.softmax(probs)
+			probs = self.softmax(weights)
 		if to_numpy:
 			probs = probs.data.cpu().numpy()
 		return probs
 
 
-	def encode_dataset(self, dataset, to_numpy = True, batch_size=1):
+	def predict_dataset(self, dataset, to_numpy = True, batch_size=1):
 		dataloader = data_utils.DataLoader(dataset, batch_size=batch_size)
 		class_probs = []
 		data_ixs = []
 		most_probable_classes = []
-		for data, _, _, _, _, ix_in_list in dataloader:
-			probs = self.encode(data, is_packed=True, to_numpy=to_numpy)
+		for data, _, ix_in_list in dataloader:
+			probs = self.predict(data, is_packed=True, to_numpy=to_numpy)
 			class_probs += probs.tolist()
-			data_ixs += ix_in_list
+			data_ixs += ix_in_list.tolist()
 			most_probable_classes += probs.argmax(-1).tolist()
 		df_prob = pd.DataFrame(class_probs)
+		df_prob['data_ix'] = data_ixs
+		df_prob['most_probable'] = most_probable_classes
+		df_prob = df_prob.melt(id_vars=['data_ix','most_probable'], var_name='class_ix', value_name='prob')
+		df_prob['is_most_probable'] = df_prob.class_ix==df_prob.most_probable
+		df_prob = df_prob.drop(columns=['most_probable'])
 		return df_prob
 
 def get_parameters():
@@ -54,8 +59,7 @@ def get_parameters():
 	par_parser.add_argument('model_path', type=str, help='Path to the configuration file of a trained model.')
 	par_parser.add_argument('input_root', type=str, help='Path to the root directory under which inputs are located.')
 	par_parser.add_argument('annotation_file', type=str, help='Path to the annotation csv file.')
-	par_parser.add_argument('data_normalizer', type=float, help='Normalizing constant to devide the data.')
-	par_parser.add_argument('context_length', type=float, help='Length of the prefix and suffix sound wave in sec.')
+	par_parser.add_argument('-N', '--data_normalizer', type=float, default=1.0, help='Normalizing constant to devide the data.')
 	par_parser.add_argument('--annotation_sep', type=str, default=',', help='Separator symbol of the annotation file. Comma "," by default (i.e., csv).')
 	par_parser.add_argument('-d', '--device', type=str, default='cpu', help='Computing device.')
 	par_parser.add_argument('-S', '--save_path', type=str, default=None, help='Path to the file where results are saved.')
@@ -66,7 +70,9 @@ def get_parameters():
 	par_parser.add_argument('--channel', type=int, default=0, help='Channel ID # (starting from 0) of multichannel recordings to use.')
 	par_parser.add_argument('--mfcc', action='store_true', help='Use the MFCCs for the input.')
 	par_parser.add_argument('--num_mfcc', type=int, default=20, help='# of MFCCs to use as the input.')
-	par_parser.add_argument('-p', '--parameter_names', type=str, default=None, nargs='+', help='Space-separated parameter names.')
+	par_parser.add_argument('--formant', action='store_true', help='Use formants as the input.')
+	par_parser.add_argument('--num_formants', type=int, default=2, help='# of formants used.')
+	par_parser.add_argument('--use_pitch', action='store_true', help='If selected, use F0 ("Pitch" in Praat) in addition to higher formants.')
 	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
 	par_parser.add_argument('-b', '--batch_size', type=int, default=1, help='Batch size.')
 
@@ -89,7 +95,7 @@ if __name__ == '__main__':
 	fft_step_size = int(np.floor(parameters.fft_step_size * fs))
 
 	# Get a model.
-	encoder = Encoder(parameters.model_path, device=parameters.device)
+	predictor = Predictor(parameters.model_path, device=parameters.device)
 
 	to_tensor = data_utils.ToTensor()
 	if parameters.mfcc:
@@ -103,20 +109,24 @@ if __name__ == '__main__':
 				})
 		squeeze_transpose_and_normalize = data_utils.Transform(lambda x: x.squeeze(dim=0).t() / parameters.data_normalizer)
 		transform = Compose([to_tensor,broadcast,mfcc,squeeze_transpose_and_normalize])
+	elif parameters.formant:
+		get_formants = data_utils.Formant(fs, parameters.fft_frame_length, parameters.fft_step_size, num_formants=parameters.num_formants, use_pitch=parameters.use_pitch)
+		half_nyquist_freq = fs / 4
+		normalize = data_utils.Transform(lambda x: (x / half_nyquist_freq) - 1.0)
+		transform = Compose([get_formants, to_tensor, normalize])
 	else:
 		stft = data_utils.STFT(fft_frame_length, fft_step_size, window=parameters.fft_window_type, centering=not parameters.fft_no_centering)
 		log_and_normalize = data_utils.Transform(lambda x: (x + parameters.epsilon).log() / parameters.data_normalizer)
 		transform = Compose([to_tensor,stft,log_and_normalize])
 
-	dataset = data_parser.get_data(transform=transform, channel=parameters.channel, context_length_in_sec=parameters.context_length)
+	dataset = data_parser.get_data(transform=transform, channel=parameters.channel)
 
-	if parameters.parameter_names is None:
-		parameter_ix2name = {}
-	else:
-		parameter_ix2name = dict(enumerate(parameters.parameter_names))
-	df_encoded = encoder.encode_dataset(dataset, parameter_ix2name=parameter_ix2name, batch_size=parameters.batch_size)
-	df_encoded = df_encoded.sort_values(['data_ix','parameter_name','feature_dim'])
+	df_prob = predictor.predict_dataset(dataset, batch_size=parameters.batch_size)
+	df_prob = df_prob.sort_values(['data_ix','class_ix'])
+	df_prob['class_label'] = df_prob.class_ix.map(data_parser.get_ix2label())
 	if 'label' in data_parser.df_annotation.columns:
-		df_encoded = df_encoded.merge(data_parser.df_annotation, how='left', left_on='data_ix', right_index=True)
-	df_encoded.to_csv(save_path, index=False)
+		df_prob = df_prob.merge(data_parser.df_annotation, how='left', left_on='data_ix', right_index=True)
+		df_prob['is_target'] = df_prob.class_label==df_prob.label
+	df_prob = df_prob.drop(columns=[col for col in df_prob.columns if col.startswith('Unnamed:')])
+	df_prob.to_csv(save_path, index=False)
 

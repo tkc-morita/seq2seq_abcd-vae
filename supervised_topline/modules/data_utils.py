@@ -21,6 +21,9 @@ class Data_Parser(object):
 		self.label2ix = {l:ix for ix,l in enumerate(self.df_annotation.label.unique())}
 		self.df_annotation.loc[:,'label_ix'] = self.df_annotation.label.map(self.label2ix)
 
+	def get_ix2label(self):
+		return {ix:label for label,ix in self.label2ix.items()}
+
 	def get_num_labels(self):
 		return len(self.df_annotation.label.unique())
 
