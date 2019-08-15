@@ -374,8 +374,8 @@ if __name__ == '__main__':
 		input_size = parameters.num_mfcc
 	elif parameters.formant:
 		get_formants = data_utils.Formant(fs, parameters.fft_frame_length, parameters.fft_step_size, num_formants=parameters.num_formants, use_pitch=parameters.use_pitch)
-		nyquist_freq = fs / 2
-		normalize = data_utils.Transform(lambda x: (x / nyquist_freq) - 1.0)
+		half_nyquist_freq = fs / 4
+		normalize = data_utils.Transform(lambda x: (x / half_nyquist_freq) - 1.0)
 		transform = Compose([get_formants, to_tensor, normalize])
 		input_size = parameters.num_formants
 		if parameters.use_pitch:
@@ -415,6 +415,7 @@ if __name__ == '__main__':
 		else:
 			lowest_formant = 1
 		logger.info("F{lowest_formant}-F{highest_formant} will be the input.".format(lowest_formant=lowest_formant, highest_formant=parameters.num_formants))
+		logger.info("Formant freqs are first divided by the half Nyquist freq. and then -1.0 is added s.t. the input range in [-1.0,1.0].")
 	else:
 		logger.info("log(abs(STFT(wav))) + {eps}) / {normalizer} will be the input.".format(eps=parameters.epsilon, normalizer=parameters.data_normalizer))
 

@@ -18,8 +18,8 @@ class Data_Parser(object):
 		self.index_label()
 
 	def index_label(self):
-		label2ix = {l:ix for ix,l in enumerate(self.df_annotation.label.unique())}
-		self.df_annotation.loc[:,'label_ix'] = self.df_annotation.label.map(label2ix)
+		self.label2ix = {l:ix for ix,l in enumerate(self.df_annotation.label.unique())}
+		self.df_annotation.loc[:,'label_ix'] = self.df_annotation.label.map(self.label2ix)
 
 	def get_num_labels(self):
 		return len(self.df_annotation.label.unique())
@@ -129,19 +129,27 @@ class Formant(object):
 		self.step_size_in_sec = step_size_in_sec
 		self.num_formants = num_formants
 		self.use_pitch = use_pitch
+		if use_pitch:
+			self.stft = STFT(int(self.frame_length_in_sec*self.fs), int(self.step_size_in_sec*self.fs))
+			self.delta_freq = self.frame_length_in_sec**-1
 
 	def __call__(self, wave):
 		snd = psm.Sound(wave, self.fs)
 		fmt = snd.to_formant_burg(time_step=self.step_size_in_sec, window_length=self.frame_length_in_sec)
 		sample_points_in_sec = [fmt.frame_number_to_time(frame_ix+1) for frame_ix in range(fmt.n_frames)]
 		if self.use_pitch:
-			pitch = snd.to_pitch(time_step=self.frame_length_in_sec)
+			spectra = self.stft(torch.from_numpy(wave))
+			spectral_peaks = spectra.argmax(-1) * self.delta_freq
+			# pitch = snd.to_pitch(pitch_floor=75, pitch_ceiling=8000)
+			# pitch = snd.to_pitch_cc(pitch_floor=75, pitch_ceiling=8000)
+			# pitch = snd.to_pitch_shs(pitch_floor=75, pitch_ceiling=8000)
+			# print([pitch.get_value_in_frame(ix) for ix in range(1,pitch.get_number_of_frames()+1)])
 			return np.array(
 						[
-							[pitch.get_value_at_time(sample_t_in_sec)]
+							[f0]
 							+[fmt.get_value_at_time(fmt_ix, sample_t_in_sec)
 							for fmt_ix in range(1,self.num_formants+1)]
-						for sample_t_in_sec in sample_points_in_sec
+						for f0,sample_t_in_sec in zip(spectral_peaks, sample_points_in_sec)
 						], dtype=np.float32)
 		return np.array(
 					[

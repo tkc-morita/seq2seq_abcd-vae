@@ -15,6 +15,8 @@ class Encoder(learning.Learner):
 		self.retrieve_model(checkpoint_path = model_config_path, device=device)
 		for param in self.parameters():
 			param.requires_grad = False
+		self.softmax = torch.nn.Softmax(dim=-1)
+		self.modules.append(self.softmax)
 		[m.eval() for m in self.modules]
 
 
@@ -25,33 +27,26 @@ class Encoder(learning.Learner):
 			data = torch.nn.utils.rnn.pack_sequence(data)
 		with torch.no_grad():
 			data = data.to(self.device)
-			if not self.frame_encoder is None:
-				cnn_out = self.frame_encoder(data.data)
-				frame_params = self.frame_feature_sampler(cnn_out)
-				data = torch.nn.utils.rnn.PackedSequence(frame_params[0], batch_sizes=data.batch_sizes) # 1st parameter is assumed to be the mean.
 			last_hidden = self.encoder(data)
-			params = self.feature_sampler(last_hidden)
+			weights = self.classifier(last_hidden)
+			probs = self.softmax(probs)
 		if to_numpy:
-			params = (p.data.cpu().numpy() for p in params)
-		return params
+			probs = probs.data.cpu().numpy()
+		return probs
 
 
-	def encode_dataset(self, dataset, to_numpy = True, parameter_ix2name=None, batch_size=1):
-		if parameter_ix2name is None:
-			parameter_ix2name = {}
+	def encode_dataset(self, dataset, to_numpy = True, batch_size=1):
 		dataloader = data_utils.DataLoader(dataset, batch_size=batch_size)
-		encoded = []
+		class_probs = []
+		data_ixs = []
+		most_probable_classes = []
 		for data, _, _, _, _, ix_in_list in dataloader:
-			params = self.encode(data, is_packed=True, to_numpy=to_numpy)
-			for parameter_ix,p in enumerate(params):
-				if parameter_ix in parameter_ix2name:
-					parameter_name = parameter_ix2name[parameter_ix]
-				else:
-					parameter_name = parameter_ix
-				for data_ix_in_batch,data_ix in enumerate(ix_in_list):
-					encoded += [(data_ix,parameter_name,feature_dim,parameter_value) for feature_dim,parameter_value in enumerate(p[data_ix_in_batch,:])]
-		df_encoded = pd.DataFrame(encoded, columns=['data_ix','parameter_name','feature_dim','parameter_value'])
-		return df_encoded
+			probs = self.encode(data, is_packed=True, to_numpy=to_numpy)
+			class_probs += probs.tolist()
+			data_ixs += ix_in_list
+			most_probable_classes += probs.argmax(-1).tolist()
+		df_prob = pd.DataFrame(class_probs)
+		return df_prob
 
 def get_parameters():
 	par_parser = argparse.ArgumentParser()
