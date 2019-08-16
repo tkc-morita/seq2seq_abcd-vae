@@ -48,6 +48,7 @@ class Learner(object):
 			seed=1111,
 			esn_leak=1.0,
 			use_input_mean = False,
+			use_input_median = False,
 			use_resampling = False,
 			num_resampled_frames = 10,
 			):
@@ -79,11 +80,7 @@ class Learner(object):
 			torch.manual_seed(seed)
 			torch.cuda.manual_seed_all(seed) # According to the docs, "It’s safe to call this function if CUDA is not available; in that case, it is silently ignored."
 			logger.info('Random seed: {seed}'.format(seed = seed))
-			if encoder_hidden_dropout > 0.0 and encoder_rnn_layers==1:
-				logger.warning('Non-zero dropout cannot be used for the single-layer encoder RNN (because there is no non-top hidden layers).')
-				logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
-				encoder_hidden_dropout = 0.0
-			assert not (use_input_mean and use_resampling), 'You cannot set both as True.'
+			self.use_input_median = False
 			if use_resampling:
 				self.encoder = model.Resample(num_resampled_frames)
 				classifier_input_size = num_resampled_frames * input_size + 1
@@ -94,9 +91,13 @@ class Learner(object):
 				classifier_input_size = input_size + 1
 				logger.info('Take the mean of the input over the time dimension.')
 				logger.info('Original sequence length is appended to the input.')
+			elif use_input_median:
+				self.encoder = model.TakeMedian()
+				classifier_input_size = input_size + 1
+				self.use_input_median = True
+				logger.info('Take the median of the input over the time dimension.')
+				logger.info('Original sequence length is appended to the input.')
 			else:
-				self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
-				classifier_input_size = self.encoder.hidden_size_total
 				logger.info('Type of RNN used for the encoder: {rnn_type}'.format(rnn_type=encoder_rnn_type))
 				logger.info("# of RNN hidden layers in the encoder RNN: {hl}".format(hl=encoder_rnn_layers))
 				logger.info("# of hidden units in the encoder RNNs: {hs}".format(hs=encoder_rnn_hidden_size))
@@ -104,6 +105,12 @@ class Learner(object):
 				logger.info("Dropout rate in the non-top layers of the encoder RNN: {do}".format(do=encoder_hidden_dropout))
 				if encoder_rnn_type == 'ESN':
 					logger.info('ESN leak: {leak}'.format(leak=esn_leak))
+				if encoder_hidden_dropout > 0.0 and encoder_rnn_layers==1:
+					logger.warning('Non-zero dropout cannot be used for the single-layer encoder RNN (because there is no non-top hidden layers).')
+					logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
+					encoder_hidden_dropout = 0.0
+				self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
+				classifier_input_size = self.encoder.hidden_size_total
 			self.encoder.to(self.device)
 			self.classifier = model.MLP(classifier_input_size, mlp_hidden_size, num_categories)
 			self.classifier.to(self.device)
@@ -248,6 +255,7 @@ class Learner(object):
 			'lr_scheduler':self.lr_scheduler.state_dict(),
 			'gradient_clip':self.gradient_clip,
 			'random_state':torch.get_rng_state(),
+			'use_input_median':self.use_input_median
 		}
 		if torch.cuda.is_available():
 			checkpoint['random_state_cuda'] = torch.cuda.get_rng_state_all()
@@ -265,10 +273,14 @@ class Learner(object):
 				new_key = key.replace('init_parameters', 'init_args')
 				checkpoint[new_key] = value
 
+		self.use_input_median = False
 		if 'rnn_type' in checkpoint['encoder_init_args']:
 			self.encoder = model.RNN_Variational_Encoder(**checkpoint['encoder_init_args'])
 		elif 'num_samples' in checkpoint['encoder_init_args']:
 			self.encoder = model.Resample(**checkpoint['encoder_init_args'])
+		elif 'use_input_median' in checkpoint and checkpoint['use_input_median']:
+			self.encoder = model.TakeMedian()
+			self.use_input_median = True
 		else:
 			self.encoder = model.TakeMean()
 		self.encoder.load_state_dict(checkpoint['encoder'])
@@ -330,6 +342,7 @@ def get_parameters():
 	par_parser.add_argument('-N','--data_normalizer', type=float, default=1.0, help='Normalizing constant to devide the data.')
 	par_parser.add_argument('-E','--epsilon', type=float, default=2**(-15), help='Small positive real number to add to avoid log(0).')
 	par_parser.add_argument('--use_input_mean', action='store_true', help='Pass the mean of the input frames over the time dimension to the MLP classifier.')
+	par_parser.add_argument('--use_input_median', action='store_true', help='Pass the median of the input frames over the time dimension to the MLP classifier.')
 	par_parser.add_argument('--use_resampling', action='store_true', help='Resample the input frames and pass them to the MLP classifier.')
 	par_parser.add_argument('--num_resampled_frames', type=int, default=10, help='# of resampled frames to pass to the MLP decoder. Used only if --use_resampling is selected.')
 	
@@ -399,6 +412,7 @@ if __name__ == '__main__':
 				device = parameters.device,
 				seed = parameters.seed,
 				use_input_mean = parameters.use_input_mean,
+				use_input_median = parameters.use_input_median,
 				use_resampling = parameters.use_resampling,
 				num_resampled_frames = parameters.num_resampled_frames,
 				)
