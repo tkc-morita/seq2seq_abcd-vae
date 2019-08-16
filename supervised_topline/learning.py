@@ -44,7 +44,7 @@ class Learner(object):
 			encoder_rnn_layers=1,
 			bidirectional_encoder=True,
 			encoder_hidden_dropout = 0.0,
-			device=False,
+			device='cpu',
 			seed=1111,
 			esn_leak=1.0,
 			use_input_mean = False,

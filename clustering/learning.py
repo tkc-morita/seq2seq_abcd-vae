@@ -50,7 +50,7 @@ class Learner(object):
 			right2left_decoder_weight=0.5,
 			encoder_hidden_dropout = 0.0,
 			decoder_input_dropout = 0.0,
-			device=False,
+			device='cpu',
 			seed=1111,
 			emission_distribution='isotropic_gaussian',
 			decoder_self_feedback=True,
