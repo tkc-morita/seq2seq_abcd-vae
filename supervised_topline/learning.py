@@ -287,6 +287,7 @@ class Learner(object):
 		self.encoder.to(self.device)
 		self.classifier = model.MLP(**checkpoint['classifier_init_args'])
 		self.classifier.load_state_dict(checkpoint['classifier'])
+		self.classifier.to(self.device)
 		self.modules = [self.encoder, self.classifier]
 
 		self.parameters = lambda:itertools.chain(*[m.parameters() for m in self.modules])
