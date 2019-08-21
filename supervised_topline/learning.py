@@ -36,10 +36,10 @@ def update_log_handler(file_dir):
 class Learner(object):
 	def __init__(self,
 			input_size,
-			encoder_rnn_hidden_size,
 			mlp_hidden_size,
 			num_categories,
 			save_dir,
+			encoder_rnn_hidden_size=128,
 			encoder_rnn_type='LSTM',
 			encoder_rnn_layers=1,
 			bidirectional_encoder=True,
@@ -51,6 +51,10 @@ class Learner(object):
 			use_input_median = False,
 			use_resampling = False,
 			num_resampled_frames = 10,
+			use_attention = False,
+			attention_hidden_size = 512,
+			num_attention_heads = 8,
+			num_attention_layers = 1,
 			):
 		self.retrieval,self.log_file_path = update_log_handler(save_dir)
 		if torch.cuda.is_available():
@@ -97,6 +101,14 @@ class Learner(object):
 				self.use_input_median = True
 				logger.info('Take the median of the input over the time dimension.')
 				logger.info('Original sequence length is appended to the input.')
+			elif use_attention:
+				self.encoder = model.AttentionEncoderToFixedLength(input_size, attention_hidden_size, mlp_hidden_size, num_heads=num_attention_heads, num_layers=num_attention_layers, dropout=encoder_hidden_dropout)
+				logger.info('Use attention (alone).')
+				logger.info('# of attention layers: {}'.format(num_attention_layers))
+				logger.info('# of attention hidden units per layer: {}'.format(attention_hidden_size))
+				logger.info('# of attention heads: {}'.format(num_attention_heads))
+				logger.info('Dropout rate at the top of the sublayers: {}'.format(encoder_hidden_dropout))
+				classifier_input_size = attention_hidden_size
 			else:
 				logger.info('Type of RNN used for the encoder: {rnn_type}'.format(rnn_type=encoder_rnn_type))
 				logger.info("# of RNN hidden layers in the encoder RNN: {hl}".format(hl=encoder_rnn_layers))
@@ -278,6 +290,8 @@ class Learner(object):
 			self.encoder = model.RNN_Variational_Encoder(**checkpoint['encoder_init_args'])
 		elif 'num_samples' in checkpoint['encoder_init_args']:
 			self.encoder = model.Resample(**checkpoint['encoder_init_args'])
+		elif 'num_heads' in checkpoint['encoder_init_args']:
+			self.encoder = model.AttentionEncoderToFixedLength(**checkpoint['encoder_init_args'])
 		elif 'use_input_median' in checkpoint and checkpoint['use_input_median']:
 			self.encoder = model.TakeMedian()
 			self.use_input_median = True
@@ -346,6 +360,10 @@ def get_parameters():
 	par_parser.add_argument('--use_input_median', action='store_true', help='Pass the median of the input frames over the time dimension to the MLP classifier.')
 	par_parser.add_argument('--use_resampling', action='store_true', help='Resample the input frames and pass them to the MLP classifier.')
 	par_parser.add_argument('--num_resampled_frames', type=int, default=10, help='# of resampled frames to pass to the MLP decoder. Used only if --use_resampling is selected.')
+	par_parser.add_argument('--use_attention', action='store_true', help='If selected, use attention instead of RNN.')
+	par_parser.add_argument('--attention_hidden_size', type=int, default=512, help='Dimensionality of the hidden space of the attention.')
+	par_parser.add_argument('--num_attention_heads', type=int, default=8, help='# of attention heads.')
+	par_parser.add_argument('--num_attention_layers', type=int, default=1, help='# of layers of attention.')
 	
 	return par_parser.parse_args()
 
@@ -403,10 +421,10 @@ if __name__ == '__main__':
 	# Get a model.
 	learner = Learner(
 				input_size,
-				parameters.encoder_rnn_hidden_size,
 				parameters.mlp_hidden_size,
 				data_parser.get_num_labels(),
 				save_dir,
+				encoder_rnn_hidden_size=parameters.encoder_rnn_hidden_size,
 				encoder_rnn_type=parameters.encoder_rnn_type,
 				encoder_rnn_layers=parameters.encoder_rnn_layers,
 				encoder_hidden_dropout=parameters.encoder_hidden_dropout,
@@ -416,6 +434,10 @@ if __name__ == '__main__':
 				use_input_median = parameters.use_input_median,
 				use_resampling = parameters.use_resampling,
 				num_resampled_frames = parameters.num_resampled_frames,
+				use_attention = parameters.use_attention,
+				attention_hidden_size = parameters.attention_hidden_size,
+				num_attention_heads = parameters.num_attention_heads,
+				num_attention_layers = parameters.num_attention_layers
 				)
 
 	logger.info("Sampling frequency of data: {fs}".format(fs=fs))
