@@ -45,7 +45,7 @@ def pad_flatten_sequence(flatten, batch_sizes, padding_value=0.0):
 
 def get_mask_from_lengths(lengths):
 	max_length = lengths.max()
-	mask = torch.arange(max_length).view(1,-1)>=lengths.view(-1,1)
+	mask = torch.arange(max_length).view(1,-1).to(lengths.device)>=lengths.view(-1,1)
 	return mask
 
 class RNN_Variational_Encoder(torch.nn.Module):
@@ -174,8 +174,9 @@ class SelfAttentionEncoder(torch.nn.Module):
 
 	def forward(self, packed_input):
 		_,lengths = torch.nn.utils.rnn.pad_packed_sequence(packed_input, batch_first=True)
+		lengths = lengths.to(packed_input.data.device)
 		hidden = self.to_hidden(packed_input.data)
-		pos_encodings = self.encode_position(lengths, hidden.size(-1), hidden.device)
+		pos_encodings = self.encode_position(lengths, hidden.size(-1))
 		hidden = hidden + pos_encodings.data
 		query = self.to_query(hidden)
 		key = self.to_key(hidden)
@@ -199,15 +200,15 @@ class SelfAttentionEncoder(torch.nn.Module):
 		out = self.layer_norm(hidden + out)
 		return torch.nn.utils.rnn.PackedSequence(out, packed_input.batch_sizes)
 
-	def encode_position(self, lengths, hidden_size, device):
+	def encode_position(self, lengths, hidden_size):
 		max_length = lengths.max()
 		half_hidden_size = hidden_size // 2
 		encodings = (
-			torch.arange(max_length).view(-1,1).to(device).float()
+			torch.arange(max_length).view(-1,1).to(lengths.device).float()
 			/
-			10000**torch.arange(0,1,2/hidden_size).view(1,-1).to(device)
+			10000**torch.arange(0,1,2/hidden_size).view(1,-1).to(lengths.device)
 		)
-		encodings = torch.cat([encodings.sin(), encodings.cos()], dim=-1)
+		encodings = torch.stack([encodings.sin(), encodings.cos()], dim=-1).view(encodings.size(0),-1)
 		encodings = torch.nn.utils.rnn.pack_sequence(
 						[encodings[:l] for l in lengths]
 						)
