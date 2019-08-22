@@ -36,17 +36,32 @@ def log_pdf_isotropic_gaussian(value, mean, log_variance):
 				+ value_mean_diff * (-log_variance).exp() * value_mean_diff
 				).sum()
 
-def pad_flatten_sequence(flatten, batch_sizes, padding_value=0.0):
-	return torch.nn.utils.rnn.pad_packed_sequence(
-				torch.nn.utils.rnn.PackedSequence(flatten, batch_sizes),
-				batch_first=True,
-				padding_value=padding_value
-			)
+def pad_flatten_sequence(flatten, batch_sizes, padding_value=0.0, batch_first=False):
+	return torch.nn._VF._pad_packed_sequence(
+				flatten,
+				batch_sizes,
+				batch_first,
+				padding_value,
+				batch_sizes.size(0)
+				)
 
 def get_mask_from_lengths(lengths):
 	max_length = lengths.max()
 	mask = torch.arange(max_length).view(1,-1).to(lengths.device)>=lengths.view(-1,1)
 	return mask
+
+def batch_sizes2lengths(batch_sizes):
+	lengths = torch.zeros(batch_sizes[0]).long()
+	for bs in batch_sizes:
+		lengths[:bs] += 1
+	return lengths
+
+def lengths2batch_sizes(lengths):
+	batch_sizes = torch.zeros(lengths.size(0)).long()
+	for l in lengths:
+		batch_sizes[:l] += 1
+	return batch_sizes
+
 
 class RNN_Variational_Encoder(torch.nn.Module):
 	"""
@@ -92,38 +107,26 @@ class RNN_Variational_Encoder(torch.nn.Module):
 class AttentionEncoderToFixedLength(torch.nn.Module):
 	def __init__(self, input_size, hidden_size, mlp_hidden_size, num_heads=8, num_layers=1, dropout=0.0):
 		super(AttentionEncoderToFixedLength, self).__init__()
-		self.self_attention = torch.nn.Sequential(
-									collections.OrderedDict([
-									('layer{}'.format(l),
-									SelfAttentionEncoder(i, hidden_size, mlp_hidden_size, num_heads=num_heads, dropout=dropout)
-									)
-									for l,i in enumerate([input_size]+(num_layers-1)*[hidden_size])
-									]))
+		self.self_attention = SelfAttentionEncoder(input_size, hidden_size, mlp_hidden_size, num_heads=num_heads, num_layers=num_layers, dropout=dropout)
 		hidden_size_per_head = hidden_size // num_heads
-		self.to_frame_feature = torch.nn.Sequential(
-									MLP(hidden_size, mlp_hidden_size, hidden_size),
-									LinearSplit(hidden_size, hidden_size_per_head, num_heads)
-									)
-		self.to_frame_weight = torch.nn.Sequential(
-									MLP(hidden_size, mlp_hidden_size, hidden_size),
-									LinearSplit(hidden_size, 1, num_heads)
-									)
+		self.to_frame_feature = LinearSplit(hidden_size, hidden_size_per_head, num_heads)
+		self.to_frame_weight = LinearSplit(hidden_size, 1, num_heads)
 		self.last_linear = torch.nn.Linear(hidden_size_per_head*num_heads, hidden_size)
 		self.softmax = torch.nn.Softmax(dim=-1)
 		self.dropout = torch.nn.Dropout(dropout)
 
 	def forward(self, packed_input):
-		packed_hidden = self.self_attention(packed_input)
-		frame_feature = self.to_frame_feature(packed_hidden.data)
+		hidden = self.self_attention(packed_input)
+		frame_feature = self.to_frame_feature(hidden)
 		frame_feature = torch.stack(
-							[pad_flatten_sequence(f, packed_input.batch_sizes)[0]
+							[pad_flatten_sequence(f, packed_input.batch_sizes, batch_first=True)[0]
 							for f in frame_feature],
 							dim=1
 							) # batch_size x num_heads x length x hidden_size_per_head
 
-		frame_weight = self.to_frame_weight(packed_hidden.data)
+		frame_weight = self.to_frame_weight(hidden)
 		frame_weight = torch.stack(
-							[pad_flatten_sequence(w, packed_input.batch_sizes, padding_value=-float('inf'))[0]
+							[pad_flatten_sequence(w, packed_input.batch_sizes, batch_first=True, padding_value=-float('inf'))[0]
 							for w in frame_weight],
 							dim=1
 							) # batch_size x num_heads x length x 1
@@ -138,67 +141,43 @@ class AttentionEncoderToFixedLength(torch.nn.Module):
 		return out
 
 	def pack_init_args(self):
-		args = {
-			'input_size':self.self_attention.layer0.to_hidden.input_size,
-			'hidden_size':self.self_attention.layer0.to_hidden.output_size,
-			'mlp_hidden_size':self.self_attention.layer0.to_hidden.hidden_size,
-			'num_heads':len(self.self_attention.layer0.heads),
-			'num_layers':len(self.self_attention),
-			'dropout':self.dropout.p
-		}
-		return args
+		return self.self_attention.pack_init_args()
 
 
 class SelfAttentionEncoder(torch.nn.Module):
-	def __init__(self, input_size, hidden_size, mlp_hidden_size, num_heads=8, dropout=0.0):
+	def __init__(self, input_size, hidden_size, mlp_hidden_size, num_heads=8, num_layers=1, dropout=0.0):
 		super(SelfAttentionEncoder, self).__init__()
-		hidden_size_per_head = hidden_size // num_heads
 		self.to_hidden = MLP(input_size, mlp_hidden_size, hidden_size)
-		self.to_query = torch.nn.Sequential(
-							MLP(hidden_size, mlp_hidden_size, hidden_size),
-							LinearSplit(hidden_size, hidden_size_per_head, num_heads)
-							)
-		self.to_key = torch.nn.Sequential(
-							MLP(hidden_size, mlp_hidden_size, hidden_size),
-							LinearSplit(hidden_size, hidden_size_per_head, num_heads)
-							)
-		self.to_value = torch.nn.Sequential(
-							MLP(hidden_size, mlp_hidden_size, hidden_size),
-							LinearSplit(hidden_size, hidden_size_per_head, num_heads)
-							)
-		self.heads = torch.nn.ModuleList([DotProductAttentionHead() for ix in range(num_heads)])
-		self.heads2attention = torch.nn.Linear(hidden_size_per_head*num_heads, hidden_size)
-		self.top_feedfoward = MLP(hidden_size, mlp_hidden_size, hidden_size, nonlinearity='ReLU')
-		self.dropout = torch.nn.Dropout(dropout)
-		self.layer_norm = torch.nn.LayerNorm(hidden_size)
+		self.input_size = input_size
+		self.hidden_size = hidden_size
+		self.mlp_hidden_size = mlp_hidden_size
+		self.num_heads = num_heads
+		self.num_layers = num_layers
+		self.dropout = dropout
+		self.self_attention = torch.nn.Sequential(
+									collections.OrderedDict([
+									('layer{}'.format(l),
+									SelfAttentionLayer(hidden_size, mlp_hidden_size, num_heads=num_heads, dropout=dropout)
+									)
+									for l in range(num_layers)
+									]))
 
-	def forward(self, packed_input):
-		_,lengths = torch.nn.utils.rnn.pad_packed_sequence(packed_input, batch_first=True)
-		lengths = lengths.to(packed_input.data.device)
-		hidden = self.to_hidden(packed_input.data)
+	def forward(self, input_seqs, lengths=None, batch_sizes=None):
+		if isinstance(input_seqs, torch.nn.utils.rnn.PackedSequence):
+			batch_sizes = input_seqs.batch_sizes
+			input_seqs = input_seqs.data
+		assert lengths is not None or batch_sizes is not None, 'lengths or batch_sizes must be specified if input_seqs is not a PackedSequence instance.'
+		if lengths is None:
+			lengths = batch_sizes2lengths(batch_sizes)
+		if batch_sizes is None:
+			batch_sizes = lengths2batch_sizes(lengths)
+		lengths = lengths.to(input_seqs.device)
+		hidden = self.to_hidden(input_seqs)
 		pos_encodings = self.encode_position(lengths, hidden.size(-1))
-		hidden = hidden + pos_encodings.data
-		query = self.to_query(hidden)
-		key = self.to_key(hidden)
-		value = self.to_value(hidden)
-		attention = torch.cat([
-						h(
-							pad_flatten_sequence(q, packed_input.batch_sizes)[0],
-							pad_flatten_sequence(k, packed_input.batch_sizes)[0],
-							pad_flatten_sequence(v, packed_input.batch_sizes)[0],
-							memory_length=lengths
-						)
-						for h,q,k,v in zip(self.heads, query, key, value)],
-						dim=-1)
-		attention = torch.nn.utils.rnn.pack_padded_sequence(attention, lengths, batch_first=True).data
-		attention = self.heads2attention(attention)
-		attention = self.dropout(attention)
-		hidden = self.layer_norm(hidden + attention)
+		hidden = hidden + pos_encodings
 
-		out = self.top_feedfoward(hidden)
-		out = self.dropout(out)
-		out = self.layer_norm(hidden + out)
-		return torch.nn.utils.rnn.PackedSequence(out, packed_input.batch_sizes)
+		flatten_out = self.self_attention({'values':hidden, 'lengths':lengths, 'batch_sizes':batch_sizes})['values']
+		return flatten_out
 
 	def encode_position(self, lengths, hidden_size):
 		max_length = lengths.max()
@@ -206,13 +185,62 @@ class SelfAttentionEncoder(torch.nn.Module):
 		encodings = (
 			torch.arange(max_length).view(-1,1).to(lengths.device).float()
 			/
-			10000**torch.arange(0,1,2/hidden_size).view(1,-1).to(lengths.device)
+			(torch.arange(0,1,2/hidden_size).view(1,-1).to(lengths.device)*math.log(10000.0)).exp()
 		)
 		encodings = torch.stack([encodings.sin(), encodings.cos()], dim=-1).view(encodings.size(0),-1)
 		encodings = torch.nn.utils.rnn.pack_sequence(
 						[encodings[:l] for l in lengths]
-						)
+						).data
 		return encodings
+
+	def pack_init_args(self):
+		args = {
+			'input_size':self.input_size,
+			'hidden_size':self.hidden_size,
+			'mlp_hidden_size':self.mlp_hidden_size,
+			'num_heads':self.num_heads,
+			'num_layers':self.num_layers,
+			'dropout':self.dropout
+		}
+		return args
+
+
+class SelfAttentionLayer(torch.nn.Module):
+	def __init__(self, hidden_size, mlp_hidden_size, num_heads=8, dropout=0.0):
+		super(SelfAttentionLayer, self).__init__()
+		hidden_size_per_head = hidden_size // num_heads
+		self.to_query = LinearSplit(hidden_size, hidden_size_per_head, num_heads)
+		self.to_key = LinearSplit(hidden_size, hidden_size_per_head, num_heads)
+		self.to_value = LinearSplit(hidden_size, hidden_size_per_head, num_heads)
+
+		self.attention = DotProductAttention()
+		self.linear_combine_heads = torch.nn.Linear(hidden_size_per_head*num_heads, hidden_size)
+		self.top_feedfoward = MLP(hidden_size, mlp_hidden_size, hidden_size, nonlinearity='GELU')
+		self.dropout = torch.nn.Dropout(dropout)
+		self.layer_norm = torch.nn.LayerNorm(hidden_size)
+
+	def forward(self, input_as_dict):
+		flatten_input, lengths, batch_sizes = input_as_dict['values'], input_as_dict['lengths'], input_as_dict['batch_sizes']
+		query = self.to_query(flatten_input)
+		key = self.to_key(flatten_input)
+		value = self.to_value(flatten_input)
+		query,key,value = [pad_flatten_sequence(
+								torch.stack(listed_flattens, dim=-2),
+								batch_sizes,
+								batch_first=True
+							)[0].transpose(1,2).contiguous() # batch_size x num_heads x max_lengths x hidden_size_per_head
+							for listed_flattens in [query, key, value]]
+		attention = self.attention(query, key, value, lengths).transpose(1,2).contiguous().view(query.size(0), query.size(2), -1)
+		attention = torch.nn.utils.rnn.pack_padded_sequence(attention, lengths, batch_first=True).data
+		attention = self.linear_combine_heads(attention)
+		attention = self.dropout(attention)
+		attention = self.layer_norm(flatten_input + attention)
+
+		out = self.top_feedfoward(attention)
+		out = self.dropout(out)
+		out = self.layer_norm(attention + out)
+		input_as_dict['values'] = out
+		return input_as_dict
 
 
 
@@ -227,23 +255,23 @@ class LinearSplit(torch.nn.Module):
 	def forward(self, x):
 		return [l(x) for l in self.linears]
 
-class DotProductAttentionHead(torch.nn.Module):
+class DotProductAttention(torch.nn.Module):
 	def __init__(self):
-		super(DotProductAttentionHead, self).__init__()
+		super(DotProductAttention, self).__init__()
 		self.softmax = torch.nn.Softmax(dim=-1)
 
 	def forward(self, query, key, value, memory_length=None):
 		"""
-		query: batch_size x length_1 x hidden_size
-		key, value: batch_size x length_2 x hidden_size
-		memory_length: None or 1-dim Tensor of batch_size.
+		query: batch_size (x num_heads) x length_1 x hidden_size
+		key, value: batch_size (x num_heads) x length_2 x hidden_size
+		memory_length: None or 1-dim Tensor of batch_size. (length_2 = max(memory_length))
 		"""
-		weight = query.matmul(key.transpose(1,2))
-		weight /= math.sqrt(key.size(2))
+		weight = query.matmul(key.transpose(-2,-1))
+		weight /= math.sqrt(key.size(-1)) # batch_size (x num_heads) x length_1 x length_2
 		if not memory_length is None:
 			mask = get_mask_from_lengths(memory_length)
 			weight = weight.masked_fill(
-				mask.view(mask.size(0),1,mask.size(-1)),
+				mask.view((mask.size(0),)+(1,)*(weight.dim()-2)+(mask.size(-1),)),
 				-float('inf')
 				)
 		weight = self.softmax(weight)
@@ -267,7 +295,20 @@ class RNN_Cell(torch.nn.Module):
 		hidden = self.cell(batched_input, init_hidden)
 		return hidden
 
+class GELU(torch.jit.ScriptModule):
+	"""
+	Paper Section 3.4, last paragraph notice that BERT used the GELU instead of RELU
+	Copied from BERT-pytorch:
+	https://github.com/codertimo/BERT-pytorch/blob/master/bert_pytorch/model/utils/gelu.py
+	"""
+	__constants__ = ['sqrt_pi']
+	def __init__(self):
+		super(GELU, self).__init__()
+		self.sqrt_pi = math.sqrt(2 / math.pi)
 
+	@torch.jit.script_method
+	def forward(self, x):
+		return 0.5 * x * (1 + torch.tanh(self.sqrt_pi * (x + 0.044715 * torch.pow(x, 3))))
 
 class MLP(torch.jit.ScriptModule):
 # class MLP(torch.nn.Module):
@@ -279,9 +320,13 @@ class MLP(torch.jit.ScriptModule):
 		self.input_size = input_size
 		self.hidden_size = hidden_size
 		self.output_size = output_size
+		if nonlinearity=='GELU':
+			nonlinearity = GELU()
+		else:
+			nonlinearity = getattr(torch.nn, nonlinearity)()
 		self.whole_network = torch.nn.Sequential(
 			torch.nn.Linear(input_size, hidden_size),
-			getattr(torch.nn, nonlinearity)(),
+			nonlinearity,
 			torch.nn.Linear(hidden_size, output_size)
 			)
 
