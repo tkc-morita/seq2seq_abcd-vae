@@ -173,19 +173,19 @@ class SelfAttentionEncoder(torch.nn.Module):
 			batch_sizes = lengths2batch_sizes(lengths)
 		lengths = lengths.to(input_seqs.device)
 		hidden = self.to_hidden(input_seqs)
-		pos_encodings = self.encode_position(lengths, hidden.size(-1))
+		pos_encodings = self.encode_position(lengths)
 		hidden = hidden + pos_encodings
 
 		flatten_out = self.self_attention({'values':hidden, 'lengths':lengths, 'batch_sizes':batch_sizes})['values']
 		return flatten_out
 
-	def encode_position(self, lengths, hidden_size):
+	def encode_position(self, lengths):
 		max_length = lengths.max()
-		half_hidden_size = hidden_size // 2
+		half_hidden_size = self.hidden_size // 2
 		encodings = (
 			torch.arange(max_length).view(-1,1).to(lengths.device).float()
 			/
-			(torch.arange(0,1,2/hidden_size).view(1,-1).to(lengths.device)*math.log(10000.0)).exp()
+			(torch.arange(0,1,2/self.hidden_size).view(1,-1).to(lengths.device)*math.log(10000.0)).exp()
 		)
 		encodings = torch.stack([encodings.sin(), encodings.cos()], dim=-1).view(encodings.size(0),-1)
 		encodings = torch.nn.utils.rnn.pack_sequence(
