@@ -57,7 +57,7 @@ def batch_sizes2lengths(batch_sizes):
 	return lengths
 
 def lengths2batch_sizes(lengths):
-	batch_sizes = torch.zeros(lengths.size(0)).long()
+	batch_sizes = torch.zeros(lengths.max()).long()
 	for l in lengths:
 		batch_sizes[:l] += 1
 	return batch_sizes
