@@ -39,7 +39,7 @@ def log_pdf_isotropic_gaussian(value, mean, log_variance):
 def pad_flatten_sequence(flatten, batch_sizes, padding_value=0.0, batch_first=False):
 	return torch.nn._VF._pad_packed_sequence(
 				flatten,
-				batch_sizes,
+				batch_sizes.cpu(),
 				batch_first,
 				padding_value,
 				batch_sizes.size(0)
