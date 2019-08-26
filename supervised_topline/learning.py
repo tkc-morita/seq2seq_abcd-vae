@@ -152,7 +152,7 @@ class Learner(object):
 
 			self.optimizer.zero_grad()
 
-			last_hidden = self.encoder(packed_input)
+			last_hidden,_ = self.encoder(packed_input)
 			weights = self.classifier(last_hidden)
 
 			loss = self.cross_entropy_loss(weights, batched_target)
@@ -194,7 +194,7 @@ class Learner(object):
 				packed_input = packed_input.to(self.device)
 				batched_target = batched_target.to(self.device)
 
-				last_hidden = self.encoder(packed_input)
+				last_hidden,_ = self.encoder(packed_input)
 				weights = self.classifier(last_hidden)
 
 				total_loss += self.cross_entropy_loss(weights, batched_target).item()

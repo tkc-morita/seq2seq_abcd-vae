@@ -4,7 +4,7 @@ import torch
 from modules.data_utils import Compose
 import numpy as np
 import pandas as pd
-from modules import data_utils
+from modules import data_utils, model
 import learning
 import os, argparse, itertools
 
@@ -27,30 +27,23 @@ class Predictor(learning.Learner):
 			data = torch.nn.utils.rnn.pack_sequence(data)
 		with torch.no_grad():
 			data = data.to(self.device)
-			last_hidden,_ = self.encoder(data)
-			weights = self.classifier(last_hidden)
-			probs = self.softmax(weights)
+			_,attention = self.encoder(data)
 		if to_numpy:
-			probs = probs.data.cpu().numpy()
-		return probs
+			attention = attention.data.cpu().numpy()
+		return attention
 
 
 	def predict_dataset(self, dataset, to_numpy = True, batch_size=1):
 		dataloader = data_utils.DataLoader(dataset, batch_size=batch_size)
-		class_probs = []
-		data_ixs = []
-		most_probable_classes = []
+		results = []
 		for data, _, ix_in_list in dataloader:
-			probs = self.predict(data, is_packed=True, to_numpy=to_numpy)
-			class_probs += probs.tolist()
-			data_ixs += ix_in_list.tolist()
-			most_probable_classes += probs.argmax(-1).tolist()
-		df_prob = pd.DataFrame(class_probs)
-		df_prob['data_ix'] = data_ixs
-		df_prob['most_probable'] = most_probable_classes
-		df_prob = df_prob.melt(id_vars=['data_ix','most_probable'], var_name='class_ix', value_name='prob')
-		df_prob['is_most_probable'] = df_prob.class_ix==df_prob.most_probable
-		df_prob = df_prob.drop(columns=['most_probable'])
+			attention = self.predict(data, is_packed=True, to_numpy=to_numpy)
+			lengths = model.batch_sizes2lengths(data.batch_sizes).data.cpu().numpy()
+			results += [(data_ix,head_ix,time_ix,a)
+						for data_ix,att_per_data,l in zip(ix_in_list,attention,lengths)
+						for head_ix,att_per_head in enumerate(att_per_data)
+						for time_ix,a in enumerate(att_per_head[:l])]
+		df_prob = pd.DataFrame(results, columns=['data_ix','head_ix','time_ix','attention_weight'])
 		return df_prob
 
 def get_parameters():
@@ -122,11 +115,9 @@ if __name__ == '__main__':
 	dataset = data_parser.get_data(transform=transform, channel=parameters.channel)
 
 	df_prob = predictor.predict_dataset(dataset, batch_size=parameters.batch_size)
-	df_prob = df_prob.sort_values(['data_ix','class_ix'])
-	df_prob['class_label'] = df_prob.class_ix.map(data_parser.get_ix2label())
+	df_prob = df_prob.sort_values(['data_ix','head_ix','time_ix'])
 	if 'label' in data_parser.df_annotation.columns:
 		df_prob = df_prob.merge(data_parser.df_annotation, how='left', left_on='data_ix', right_index=True)
-		df_prob['is_target'] = df_prob.class_label==df_prob.label
 	df_prob = df_prob.drop(columns=[col for col in df_prob.columns if col.startswith('Unnamed:')])
 	df_prob.to_csv(save_path, index=False)
 

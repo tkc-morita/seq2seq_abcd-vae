@@ -89,7 +89,7 @@ class RNN_Variational_Encoder(torch.nn.Module):
 			last_hidden = torch.cat(last_hidden, dim=-1)
 		# Flatten the last_hidden into batch_size x rnn_layers * hidden_size
 		last_hidden = last_hidden.transpose(0,1).contiguous().view(last_hidden.size(1), -1)
-		return last_hidden
+		return last_hidden,None
 
 	def pack_init_args(self):
 		init_args = {
@@ -138,7 +138,7 @@ class AttentionEncoderToFixedLength(torch.nn.Module):
 		out = self.dropout(out)
 
 		out = self.last_linear(out)
-		return out
+		return out, frame_weight
 
 	def pack_init_args(self):
 		return self.self_attention.pack_init_args()
@@ -550,7 +550,7 @@ class TakeMean(torch.nn.Module):
 		lengths = lengths.to(padded_input.device)
 		out = torch.stack([seq[:l].mean(dim=0) for seq,l in zip(padded_input,lengths)])
 		out = torch.cat([out, lengths.float().view(-1,1)], dim=-1)
-		return out
+		return out, None
 
 	def pack_init_args(self):
 		return {}
@@ -561,7 +561,7 @@ class TakeMedian(torch.nn.Module):
 		lengths = lengths.to(padded_input.device)
 		out = torch.stack([seq[:l].median(dim=0)[0] for seq,l in zip(padded_input,lengths)])
 		out = torch.cat([out, lengths.float().view(-1,1)], dim=-1)
-		return out
+		return out, None
 
 	def pack_init_args(self):
 		return {}
@@ -576,7 +576,7 @@ class Resample(torch.nn.Module):
 		lengths = lengths.to(padded_input.device)
 		out = torch.stack([self.resample(seq[:l]) for seq,l in zip(padded_input,lengths)])
 		out = torch.cat([out, lengths.float().view(-1,1)], dim=-1)
-		return out
+		return out, None
 
 	def resample(self, seq):
 		gcd = math.gcd(seq.size(0), self.num_samples)
