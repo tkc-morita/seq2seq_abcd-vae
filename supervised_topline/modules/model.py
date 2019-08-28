@@ -567,15 +567,17 @@ class TakeMedian(torch.nn.Module):
 		return {}
 
 class Resample(torch.nn.Module):
-	def __init__(self, num_samples):
+	def __init__(self, num_samples, no_length=False):
 		super(Resample, self).__init__()
 		self.num_samples = num_samples
+		self.no_length = no_length
 		
 	def forward(self, packed_input):
 		padded_input, lengths = torch.nn.utils.rnn.pad_packed_sequence(packed_input, batch_first=True)
 		lengths = lengths.to(padded_input.device)
 		out = torch.stack([self.resample(seq[:l]) for seq,l in zip(padded_input,lengths)])
-		out = torch.cat([out, lengths.float().view(-1,1)], dim=-1)
+		if not self.no_length:
+			out = torch.cat([out, lengths.float().view(-1,1)], dim=-1)
 		return out, None
 
 	def resample(self, seq):
@@ -591,4 +593,4 @@ class Resample(torch.nn.Module):
 		return seq[::step_size].contiguous().view(-1)
 
 	def pack_init_args(self):
-		return {'num_samples':self.num_samples}
+		return {'num_samples':self.num_samples, 'no_length':self.no_length}

@@ -51,6 +51,7 @@ class Learner(object):
 			use_input_median = False,
 			use_resampling = False,
 			num_resampled_frames = 10,
+			no_length=False,
 			use_attention = False,
 			attention_hidden_size = 512,
 			num_attention_heads = 8,
@@ -86,10 +87,12 @@ class Learner(object):
 			logger.info('Random seed: {seed}'.format(seed = seed))
 			self.use_input_median = False
 			if use_resampling:
-				self.encoder = model.Resample(num_resampled_frames)
-				classifier_input_size = num_resampled_frames * input_size + 1
+				self.encoder = model.Resample(num_resampled_frames, no_length=no_length)
+				classifier_input_size = num_resampled_frames * input_size
 				logger.info('Resample the input time series into {} frames.'.format(num_resampled_frames))
-				logger.info('Original sequence length is appended to the input.')
+				if not no_length:
+					classifier_input_size += 1
+					logger.info('Original sequence length is appended to the input.')
 			elif use_input_mean:
 				self.encoder = model.TakeMean()
 				classifier_input_size = input_size + 1
@@ -360,6 +363,7 @@ def get_parameters():
 	par_parser.add_argument('--use_input_median', action='store_true', help='Pass the median of the input frames over the time dimension to the MLP classifier.')
 	par_parser.add_argument('--use_resampling', action='store_true', help='Resample the input frames and pass them to the MLP classifier.')
 	par_parser.add_argument('--num_resampled_frames', type=int, default=10, help='# of resampled frames to pass to the MLP decoder. Used only if --use_resampling is selected.')
+	par_parser.add_argument('--no_length', action='store_true', help='If selected, the seq length is not appended to the resampled data.')
 	par_parser.add_argument('--use_attention', action='store_true', help='If selected, use attention instead of RNN.')
 	par_parser.add_argument('--attention_hidden_size', type=int, default=512, help='Dimensionality of the hidden space of the attention.')
 	par_parser.add_argument('--num_attention_heads', type=int, default=8, help='# of attention heads.')
@@ -434,6 +438,7 @@ if __name__ == '__main__':
 				use_input_median = parameters.use_input_median,
 				use_resampling = parameters.use_resampling,
 				num_resampled_frames = parameters.num_resampled_frames,
+				no_length=parameters.no_length,
 				use_attention = parameters.use_attention,
 				attention_hidden_size = parameters.attention_hidden_size,
 				num_attention_heads = parameters.num_attention_heads,
