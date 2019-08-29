@@ -83,7 +83,7 @@ if __name__ == '__main__':
 
 	save_path = parameters.save_path
 	if save_path is None:
-		save_path = os.path.join(parameters.input_root, 'autoencoded.csv')
+		save_path = os.path.join(parameters.input_root, 'predictions.csv')
 	save_dir = os.path.dirname(save_path)
 	if not os.path.isdir(save_dir):
 		os.makedirs(save_dir)
