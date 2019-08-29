@@ -54,8 +54,8 @@ if __name__ == "__main__":
 	df_class = df_class[df_class.is_most_probable]
 	df_data = df_data.merge(df_class, how='left', on='data_ix')
 
-	df_data[:,'length'] = df_data.class_label.map(lambda s: 'long' if 'H' in s else 'short')
-	df_data[:,'length'] = pd.Categorical(df_data.length, ['short', 'long'], ordered=True)
-	df_data[:,'class'] = df_data.class_label.map(lambda s: s[0])
+	df_data.loc[:,'length'] = df_data.class_label.map(lambda s: 'long' if 'H' in s else 'short')
+	df_data.loc[:,'length'] = pd.Categorical(df_data.length, ['short', 'long'], ordered=True)
+	df_data.loc[:,'class'] = df_data.class_label.map(lambda s: s[0])
 
 	visualize_attention(df_data, save_dir=args.save_dir)
