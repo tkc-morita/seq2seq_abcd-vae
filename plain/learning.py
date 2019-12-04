@@ -343,6 +343,7 @@ def get_parameters():
 	par_parser.add_argument('--decoder_input_dropout', type=float, default=0.0, help='Dropout rate in the input to the decoder RNN.')
 	par_parser.add_argument('--greedy_decoder', action='store_true', help='If selected, decoder becomes greedy and will not receive self-feedback.')
 	par_parser.add_argument('--esn_leak', type=float, default=1.0, help='Leak for the echo-state network. Ignored if the RNN type is not ESN.')
+	par_parser.add_argument('--unidirectional_encoder', action='store_true', help='If selected, the RNN encoder is unidirectional.')
 	par_parser.add_argument('--bidirectional_decoder', action='store_true', help='If selected, use the weighted sum of losses from left-to-right and right-to-left decoders (to avoid the uninformative latent variable problem).')
 	par_parser.add_argument('--right2left_decoder_weight', type=float, default=0.5, help='The weight of the right-to-left decoder when bidirectional_decoder==True.')
 	par_parser.add_argument('--fft_frame_length', type=float, default=0.008, help='FFT frame length in sec.')
@@ -399,6 +400,7 @@ if __name__ == '__main__':
 				device = parameters.device,
 				seed = parameters.seed,
 				decoder_self_feedback=not parameters.greedy_decoder,
+				bidirectional_encoder=not parameters.unidirectional_encoder,
 				bidirectional_decoder=parameters.bidirectional_decoder,
 				right2left_decoder_weight=parameters.right2left_decoder_weight,
 				num_speakers=num_speakers,

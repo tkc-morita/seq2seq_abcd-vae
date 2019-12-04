@@ -39,7 +39,8 @@ class Learner(object):
 			mlp_hidden_size,
 			num_categories,
 			save_dir,
-			encoder_rnn_hidden_size=128,
+			embed_dim=512,
+			encoder_rnn_hidden_size=512,
 			encoder_rnn_type='LSTM',
 			encoder_rnn_layers=1,
 			bidirectional_encoder=True,
@@ -85,32 +86,36 @@ class Learner(object):
 			torch.manual_seed(seed)
 			torch.cuda.manual_seed_all(seed) # According to the docs, "It’s safe to call this function if CUDA is not available; in that case, it is silently ignored."
 			logger.info('Random seed: {seed}'.format(seed = seed))
+			self.frame_embedding = model.MLP(input_size, mlp_hidden_size, embed_dim)
+			self.frame_embedding.to(self.device)
+			logger.info('Each input frame is first MLP-transformed into {}-dim vectors.'.format(embed_dim))
+			logger.info("# of hidden units in the MLPs: {hs}".format(hs=mlp_hidden_size))
 			self.use_input_median = False
 			if use_resampling:
 				self.encoder = model.Resample(num_resampled_frames, no_length=no_length)
-				classifier_input_size = num_resampled_frames * input_size
+				classifier_input_size = num_resampled_frames * embed_dim
 				logger.info('Resample the input time series into {} frames.'.format(num_resampled_frames))
 				if not no_length:
 					classifier_input_size += 1
 					logger.info('Original sequence length is appended to the input.')
 			elif use_input_mean:
 				self.encoder = model.TakeMean()
-				classifier_input_size = input_size + 1
+				classifier_input_size = embed_dim + 1
 				logger.info('Take the mean of the input over the time dimension.')
 				logger.info('Original sequence length is appended to the input.')
 			elif use_input_median:
 				self.encoder = model.TakeMedian()
-				classifier_input_size = input_size + 1
+				classifier_input_size = embed_dim + 1
 				self.use_input_median = True
 				logger.info('Take the median of the input over the time dimension.')
 				logger.info('Original sequence length is appended to the input.')
 			elif use_attention:
-				self.encoder = model.AttentionEncoderToFixedLength(input_size, attention_hidden_size, mlp_hidden_size, num_heads=num_attention_heads, num_layers=num_attention_layers, dropout=encoder_hidden_dropout)
+				self.encoder = model.AttentionEncoderToFixedLength(embed_dim, attention_hidden_size, mlp_hidden_size, num_heads=num_attention_heads, num_layers=num_attention_layers, dropout=encoder_hidden_dropout)
 				logger.info('Use attention (alone).')
 				logger.info('# of attention layers: {}'.format(num_attention_layers))
 				logger.info('# of attention hidden units per layer: {}'.format(attention_hidden_size))
 				logger.info('# of attention heads: {}'.format(num_attention_heads))
-				logger.info('Dropout rate at the top of the sublayers: {}'.format(encoder_hidden_dropout))
+				logger.info('Dropout rate at the top of the sublayers (and at attention weights): {}'.format(encoder_hidden_dropout))
 				classifier_input_size = attention_hidden_size
 			else:
 				logger.info('Type of RNN used for the encoder: {rnn_type}'.format(rnn_type=encoder_rnn_type))
@@ -124,13 +129,12 @@ class Learner(object):
 					logger.warning('Non-zero dropout cannot be used for the single-layer encoder RNN (because there is no non-top hidden layers).')
 					logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
 					encoder_hidden_dropout = 0.0
-				self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
+				self.encoder = model.RNN_Variational_Encoder(embed_dim, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
 				classifier_input_size = self.encoder.hidden_size_total
 			self.encoder.to(self.device)
 			self.classifier = model.MLP(classifier_input_size, mlp_hidden_size, num_categories)
 			self.classifier.to(self.device)
-			logger.info("# of hidden units in the MLPs: {hs}".format(hs=mlp_hidden_size))
-			self.modules = [self.encoder, self.classifier]
+			self.modules = [self.frame_embedding, self.encoder, self.classifier]
 			self.parameters = lambda:itertools.chain(*[m.parameters() for m in self.modules])
 
 
@@ -155,7 +159,9 @@ class Learner(object):
 
 			self.optimizer.zero_grad()
 
-			last_hidden,_ = self.encoder(packed_input)
+			embed = self.frame_embedding(packed_input.data)
+			embed = torch.nn.utils.rnn.pack_padded_sequence(*model.pad_flatten_sequence(embed, packed_input.batch_sizes))
+			last_hidden = self.encoder(embed)
 			weights = self.classifier(last_hidden)
 
 			loss = self.cross_entropy_loss(weights, batched_target)
@@ -197,7 +203,9 @@ class Learner(object):
 				packed_input = packed_input.to(self.device)
 				batched_target = batched_target.to(self.device)
 
-				last_hidden,_ = self.encoder(packed_input)
+				embed = self.frame_embedding(packed_input.data)
+				embed = torch.nn.utils.rnn.pack_padded_sequence(*model.pad_flatten_sequence(embed, packed_input.batch_sizes))
+				last_hidden = self.encoder(embed)
 				weights = self.classifier(last_hidden)
 
 				total_loss += self.cross_entropy_loss(weights, batched_target).item()
@@ -262,6 +270,8 @@ class Learner(object):
 		"""
 		checkpoint = {
 			'epoch':epoch,
+			'frame_embedding':self.frame_embedding.state_dict(),
+			'frame_embedding_init_args':self.frame_embedding.pack_init_args(),
 			'encoder':self.encoder.state_dict(),
 			'encoder_init_args':self.encoder.pack_init_args(),
 			'classifier':self.classifier.state_dict(),
@@ -288,6 +298,9 @@ class Learner(object):
 				new_key = key.replace('init_parameters', 'init_args')
 				checkpoint[new_key] = value
 
+		self.frame_embedding = model.MLP(**checkpoint['frame_embedding_init_args'])
+		self.frame_embedding.load_state_dict(checkpoint['frame_embedding'])
+		self.frame_embedding.to(self.device)
 		self.use_input_median = False
 		if 'rnn_type' in checkpoint['encoder_init_args']:
 			self.encoder = model.RNN_Variational_Encoder(**checkpoint['encoder_init_args'])
@@ -305,7 +318,7 @@ class Learner(object):
 		self.classifier = model.MLP(**checkpoint['classifier_init_args'])
 		self.classifier.load_state_dict(checkpoint['classifier'])
 		self.classifier.to(self.device)
-		self.modules = [self.encoder, self.classifier]
+		self.modules = [self.frame_embedding, self.encoder, self.classifier]
 
 		self.parameters = lambda:itertools.chain(*[m.parameters() for m in self.modules])
 
@@ -341,10 +354,11 @@ def get_parameters():
 	par_parser.add_argument('-M', '--momentum', type=float, default=0.0, help='Momentum for the storchastic gradient descent.')
 	par_parser.add_argument('-c', '--clip', type=float, default=1.0, help='Gradient clipping.')
 	par_parser.add_argument('-p', '--patience', type=int, default=0, help='# of epochs before updating the learning rate.')
+	par_parser.add_argument('--embed_dim', type=int, default=512, help='Dimension of input frame embedding.')
 	par_parser.add_argument('-R', '--encoder_rnn_type', type=str, default='LSTM', help='Name of RNN to be used for the encoder.')
 	par_parser.add_argument('--encoder_rnn_layers', type=int, default=1, help='# of hidden layers in the encoder RNN.')
-	par_parser.add_argument('--encoder_rnn_hidden_size', type=int, default=100, help='# of the RNN units in the encoder RNN.')
-	par_parser.add_argument('--mlp_hidden_size', type=int, default=200, help='# of neurons in the hidden layer of the MLP transforms.')
+	par_parser.add_argument('--encoder_rnn_hidden_size', type=int, default=512, help='# of the RNN units in the encoder RNN.')
+	par_parser.add_argument('--mlp_hidden_size', type=int, default=512, help='# of neurons in the hidden layer of the MLP transforms.')
 	par_parser.add_argument('--encoder_hidden_dropout', type=float, default=0.0, help='Dropout rate in the non-top layers of the encoder RNN.')
 	par_parser.add_argument('--esn_leak', type=float, default=1.0, help='Leak for the echo-state network. Ignored if the RNN type is not ESN.')
 	par_parser.add_argument('--fft_frame_length', type=float, default=0.008, help='FFT frame length in sec.')
@@ -428,6 +442,7 @@ if __name__ == '__main__':
 				parameters.mlp_hidden_size,
 				data_parser.get_num_labels(),
 				save_dir,
+				embed_dim=parameters.embed_dim,
 				encoder_rnn_hidden_size=parameters.encoder_rnn_hidden_size,
 				encoder_rnn_type=parameters.encoder_rnn_type,
 				encoder_rnn_layers=parameters.encoder_rnn_layers,

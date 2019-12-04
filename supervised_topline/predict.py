@@ -4,7 +4,7 @@ import torch
 from modules.data_utils import Compose
 import numpy as np
 import pandas as pd
-from modules import data_utils
+from modules import data_utils, model
 import learning
 import os, argparse, itertools
 
@@ -27,7 +27,9 @@ class Predictor(learning.Learner):
 			data = torch.nn.utils.rnn.pack_sequence(data)
 		with torch.no_grad():
 			data = data.to(self.device)
-			last_hidden,_ = self.encoder(data)
+			embed = self.frame_embedding(data.data)
+			embed = torch.nn.utils.rnn.pack_padded_sequence(*model.pad_flatten_sequence(embed, data.batch_sizes))
+			last_hidden = self.encoder(embed)
 			weights = self.classifier(last_hidden)
 			probs = self.softmax(weights)
 		if to_numpy:

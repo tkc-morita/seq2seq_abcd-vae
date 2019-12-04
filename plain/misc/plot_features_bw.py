@@ -25,7 +25,7 @@ def plot_features(df):
 			plt.title('{par_name} ({d}-th dim)'.format(par_name=par_name, d=d))
 			plt.show()
 
-def tsne(df, title=None, save_path=None, hue='label'):
+def tsne(df, title=None, save_path=None):
 	tsne = skman.TSNE(n_components=2, init='pca', random_state=0)
 	df_pv = df.pivot(index='data_ix', columns='dim', values='parameter_value')
 	embedded = tsne.fit_transform(df_pv.values)
@@ -35,7 +35,7 @@ def tsne(df, title=None, save_path=None, hue='label'):
 	labels = []
 	v_included = False
 	x_included = False
-	for l in sorted(df_pv[hue].unique().tolist()):
+	for l in sorted(df_pv.label.unique().tolist()):
 		if l == 'v':
 			v_included = True
 		elif l == 'x':
@@ -46,7 +46,7 @@ def tsne(df, title=None, save_path=None, hue='label'):
 		labels = ['x'] + labels
 	if v_included:
 		labels = ['v'] + labels
-	df_pv.loc[:,hue] = pd.Categorical(df_pv[hue], categories=labels, ordered=True)
+	df_pv.loc[:,'label'] = pd.Categorical(df_pv.label, categories=labels, ordered=True)
 	color_x_markers = [('C{color_ix}'.format(color_ix=color_ix),marker)
 						for marker,color_ix
 						in itertools.product(['o','v','s'],range(10))]
@@ -57,12 +57,13 @@ def tsne(df, title=None, save_path=None, hue='label'):
 		label2color[l] = color
 		label2marker[l] = marker
 	# df_pv.groupby('label').plot.scatter(x='embed_0', y='embed_1')
-	ax = sns.scatterplot(x='embed_0', y='embed_1', data=df_pv, hue=hue, style=hue, palette=label2color, markers=label2marker)
-	ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0)
-	# if not title is None:
+	ax = sns.scatterplot(x='embed_0', y='embed_1', data=df_pv, color='k')#, hue='label', style='label', palette=label2color, markers=label2marker)
+	ax.set_xlabel('')
+	ax.set_ylabel('')
+	# ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0)
+	if not title is None:
 		# ax.set_title(title)
-	ax.set_xlabel('tSNE dim 1')
-	ax.set_ylabel('tSNE dim 2')
+		ax.set_title('tSNE representation of {}-dim embeddings'.format(df['dim'].unique().size))
 	if save_path is None:
 		plt.show()
 	else:
@@ -75,8 +76,6 @@ if __name__ == "__main__":
 	parser.add_argument('data', type=str, help='Path to the csv file containing features.')
 	parser.add_argument('-S','--save_dir', type=str, default=None, help='Path to the directory where figures are saved.')
 	parser.add_argument('-p', '--parameter', type=str, default=None, help='If given, use only the specified parameter.')
-	parser.add_argument('--hue_col', type=str, default='label', help='Name of column for hue.')
-	parser.add_argument('--ann_csv', type=str, default=None, help='Path to the annotation csv.')
 	args = parser.parse_args()
 
 	df = pd.read_csv(args.data)
@@ -90,10 +89,6 @@ if __name__ == "__main__":
 	# print(df.label.unique())
 	# df.loc[:,'label'] = pd.Categorical(df.label, categories=list('vxabcdefghijklmnopqrstuwyz'))
 
-	if not args.ann_csv is None:
-		df_ann = pd.read_csv(args.ann_csv).loc[:,['data_ix',args.hue_col]]
-		df = df.merge(df_ann, how='left', on='data_ix')
-
 	if (not args.save_dir is None) and (not os.path.isdir(args.save_dir)):
 		os.makedirs(args.save_dir)
 	# plot_features(df)
@@ -103,4 +98,4 @@ if __name__ == "__main__":
 			save_path = None
 		else:
 			save_path = os.path.join(args.save_dir, os.path.splitext(path)[0] + '.png')
-		tsne(sub_df, title=path, save_path=save_path, hue=args.hue_col)
+		tsne(sub_df, title=path, save_path=save_path)

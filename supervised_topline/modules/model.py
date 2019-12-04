@@ -89,7 +89,7 @@ class RNN_Variational_Encoder(torch.nn.Module):
 			last_hidden = torch.cat(last_hidden, dim=-1)
 		# Flatten the last_hidden into batch_size x rnn_layers * hidden_size
 		last_hidden = last_hidden.transpose(0,1).contiguous().view(last_hidden.size(1), -1)
-		return last_hidden,None
+		return last_hidden
 
 	def pack_init_args(self):
 		init_args = {
@@ -108,37 +108,24 @@ class AttentionEncoderToFixedLength(torch.nn.Module):
 	def __init__(self, input_size, hidden_size, mlp_hidden_size, num_heads=8, num_layers=1, dropout=0.0):
 		super(AttentionEncoderToFixedLength, self).__init__()
 		self.self_attention = SelfAttentionEncoder(input_size, hidden_size, mlp_hidden_size, num_heads=num_heads, num_layers=num_layers, dropout=dropout)
-		hidden_size_per_head = hidden_size // num_heads
-		self.to_frame_feature = LinearSplit(hidden_size, hidden_size_per_head, num_heads)
-		self.to_frame_weight = LinearSplit(hidden_size, 1, num_heads)
-		self.last_linear = torch.nn.Linear(hidden_size_per_head*num_heads, hidden_size)
-		self.softmax = torch.nn.Softmax(dim=-1)
-		self.dropout = torch.nn.Dropout(dropout)
+		self.register_parameter(
+			'cls_embedding',
+			torch.nn.Parameter(torch.randn(input_size), requires_grad=True)
+			)
 
 	def forward(self, packed_input):
+		"""
+		Append a dummy frame to the beginning and use its output for the classification.
+		cf. BERT
+		"""
+		padded_input, lengths = torch.nn.utils.rnn.pad_packed_sequence(packed_input, batch_first=False)
+		padded_input = torch.cat([self.cls_embedding.expand(1,padded_input.size(1),-1), padded_input], dim=0)
+		lengths += 1
+		packed_input = torch.nn.utils.rnn.pack_padded_sequence(padded_input, lengths, batch_first=False)
 		hidden = self.self_attention(packed_input)
-		frame_feature = self.to_frame_feature(hidden)
-		frame_feature = torch.stack(
-							[pad_flatten_sequence(f, packed_input.batch_sizes, batch_first=True)[0]
-							for f in frame_feature],
-							dim=1
-							) # batch_size x num_heads x length x hidden_size_per_head
-
-		frame_weight = self.to_frame_weight(hidden)
-		frame_weight = torch.stack(
-							[pad_flatten_sequence(w, packed_input.batch_sizes, batch_first=True, padding_value=-float('inf'))[0]
-							for w in frame_weight],
-							dim=1
-							) # batch_size x num_heads x length x 1
-		frame_weight = frame_weight.view(frame_weight.size()[:-1])
-		frame_weight = self.softmax(frame_weight)
-
-		out = frame_weight.view(frame_weight.size(0),frame_weight.size(1),1,frame_weight.size(-1)).matmul(frame_feature)
-		out = out.view(out.size(0), -1)
-		out = self.dropout(out)
-
-		out = self.last_linear(out)
-		return out, frame_weight
+		
+		out = hidden[:packed_input.batch_sizes[0]]
+		return out
 
 	def pack_init_args(self):
 		return self.self_attention.pack_init_args()
@@ -176,7 +163,10 @@ class SelfAttentionEncoder(torch.nn.Module):
 		pos_encodings = self.encode_position(lengths)
 		hidden = hidden + pos_encodings
 
-		flatten_out = self.self_attention({'values':hidden, 'lengths':lengths, 'batch_sizes':batch_sizes})['values']
+		input_as_dict = {'values':hidden, 'lengths':lengths, 'batch_sizes':batch_sizes}
+		input_as_dict['subbatch_info'] = self.group_into_subbatches(lengths, batch_sizes)
+
+		flatten_out = self.self_attention(input_as_dict)['values']
 		return flatten_out
 
 	def encode_position(self, lengths):
@@ -192,6 +182,51 @@ class SelfAttentionEncoder(torch.nn.Module):
 						[encodings[:l] for l in lengths]
 						).data
 		return encodings
+
+	def group_into_subbatches(self, lengths, batch_sizes):
+		subbatch_size = 0
+		subbatch_info = []
+		subbatch_lengths = []
+		subbatch_ixs = []
+		max_length = lengths.max()
+		for batch_ix, l in enumerate(lengths):
+			if subbatch_lengths and self._is_full_subbatch_size(max_length, subbatch_size+1):
+				subbatch_lengths = torch.tensor(subbatch_lengths).to(lengths.device)
+				subbatch_sizes = lengths2batch_sizes(subbatch_lengths)
+				subbatch_masks = self._get_masks(subbatch_lengths)
+				subbatch_token_ixs = self._get_subbatch_token_ixs(batch_sizes, subbatch_ixs, subbatch_lengths)
+				subbatch_info.append((subbatch_token_ixs, subbatch_lengths, subbatch_sizes, subbatch_masks))
+				max_length = l # Assuming lengths descending.
+				subbatch_size = 0
+				subbatch_lengths = []
+				subbatch_ixs = []
+			subbatch_size += 1
+			subbatch_ixs.append(batch_ix)
+			subbatch_lengths.append(l)
+		subbatch_lengths = torch.tensor(subbatch_lengths).to(lengths.device)
+		subbatch_sizes = lengths2batch_sizes(subbatch_lengths)
+		subbatch_masks = self._get_masks(subbatch_lengths)
+		subbatch_token_ixs = self._get_subbatch_token_ixs(batch_sizes, subbatch_ixs, subbatch_lengths)
+		subbatch_info.append((subbatch_token_ixs, subbatch_lengths, subbatch_sizes, subbatch_masks))
+		return subbatch_info
+
+	def _get_masks(self, lengths):
+		max_length = lengths.max()
+		masks = get_mask_from_lengths(lengths)[:,None,None,:]
+		return masks
+
+	def _get_subbatch_token_ixs(self, batch_sizes, subbatch_ixs, subbatch_lengths):
+		return [bix+cum_bs
+				for t,cum_bs in enumerate([0]+batch_sizes.cumsum(0).tolist()[:-1])
+				for bix,l_ in zip(subbatch_ixs,subbatch_lengths)
+				if t < l_
+				]
+
+	def _is_full_subbatch_size(self, max_length, subbatch_size):
+		if 512**2*16 < max_length**2*subbatch_size:
+			return True
+		else:
+			return False
 
 	def pack_init_args(self):
 		args = {
@@ -213,25 +248,31 @@ class SelfAttentionLayer(torch.nn.Module):
 		self.to_key = LinearSplit(hidden_size, hidden_size_per_head, num_heads)
 		self.to_value = LinearSplit(hidden_size, hidden_size_per_head, num_heads)
 
-		self.attention = DotProductAttention()
+		self.attention = DotProductAttention(dropout)
 		self.linear_combine_heads = torch.nn.Linear(hidden_size_per_head*num_heads, hidden_size)
 		self.top_feedfoward = MLP(hidden_size, mlp_hidden_size, hidden_size, nonlinearity='GELU')
 		self.dropout = torch.nn.Dropout(dropout)
 		self.layer_norm = torch.nn.LayerNorm(hidden_size)
 
 	def forward(self, input_as_dict):
-		flatten_input, lengths, batch_sizes = input_as_dict['values'], input_as_dict['lengths'], input_as_dict['batch_sizes']
-		query = self.to_query(flatten_input)
-		key = self.to_key(flatten_input)
-		value = self.to_value(flatten_input)
-		query,key,value = [pad_flatten_sequence(
-								torch.stack(listed_flattens, dim=-2),
-								batch_sizes,
-								batch_first=True
-							)[0].transpose(1,2).contiguous() # batch_size x num_heads x max_lengths x hidden_size_per_head
-							for listed_flattens in [query, key, value]]
-		attention = self.attention(query, key, value, lengths).transpose(1,2).contiguous().view(query.size(0), query.size(2), -1)
-		attention = torch.nn.utils.rnn.pack_padded_sequence(attention, lengths, batch_first=True).data
+		flatten_input = input_as_dict['values']
+		subbatch_info = input_as_dict['subbatch_info']
+		query = torch.stack(self.to_query(flatten_input), dim=-2)
+		key = torch.stack(self.to_key(flatten_input), dim=-2)
+		value = torch.stack(self.to_value(flatten_input), dim=-2)
+		attention = []
+		for subbatch_token_ixs, subbatch_lengths, subbatch_sizes, subbatch_masks in subbatch_info:
+			q,k,v = [pad_flatten_sequence(
+						x[subbatch_token_ixs,...],
+						subbatch_sizes,
+						batch_first=True
+					)[0].transpose(1,2).contiguous() # subbatch_size x num_heads x max_lengths x hidden_size_per_head
+					for x in [query, key, value]
+					]
+			a = self.attention(q, k, v, mask=subbatch_masks)
+			a = a.transpose(1,2).contiguous().view(a.size(0), a.size(2), -1)
+			attention += [a_per_seq[:l,...] for a_per_seq,l in zip(a, subbatch_lengths)]
+		attention = torch.nn.utils.rnn.pack_sequence(attention).data
 		attention = self.linear_combine_heads(attention)
 		attention = self.dropout(attention)
 		attention = self.layer_norm(flatten_input + attention)
@@ -256,11 +297,12 @@ class LinearSplit(torch.nn.Module):
 		return [l(x) for l in self.linears]
 
 class DotProductAttention(torch.nn.Module):
-	def __init__(self):
+	def __init__(self, dropout=0.0):
 		super(DotProductAttention, self).__init__()
 		self.softmax = torch.nn.Softmax(dim=-1)
+		self.dropout = torch.nn.Dropout(dropout)
 
-	def forward(self, query, key, value, memory_length=None):
+	def forward(self, query, key, value, mask=None, memory_length=None):
 		"""
 		query: batch_size (x num_heads) x length_1 x hidden_size
 		key, value: batch_size (x num_heads) x length_2 x hidden_size
@@ -269,12 +311,11 @@ class DotProductAttention(torch.nn.Module):
 		weight = query.matmul(key.transpose(-2,-1))
 		weight /= math.sqrt(key.size(-1)) # batch_size (x num_heads) x length_1 x length_2
 		if not memory_length is None:
-			mask = get_mask_from_lengths(memory_length)
-			weight = weight.masked_fill(
-				mask.view((mask.size(0),)+(1,)*(weight.dim()-2)+(mask.size(-1),)),
-				-float('inf')
-				)
+			mask = get_mask_from_lengths(memory_length).view((mask.size(0),)+(1,)*(weight.dim()-2)+(mask.size(-1),))
+		if mask is None:
+			weight = weight.masked_fill(mask, -float('inf'))
 		weight = self.softmax(weight)
+		weight = self.dropout(weight)
 		out = weight.matmul(value)
 		return out
 
@@ -301,14 +342,14 @@ class GELU(torch.jit.ScriptModule):
 	Copied from BERT-pytorch:
 	https://github.com/codertimo/BERT-pytorch/blob/master/bert_pytorch/model/utils/gelu.py
 	"""
-	__constants__ = ['sqrt_pi']
+	__constants__ = ['sqrt_2_over_pi']
 	def __init__(self):
 		super(GELU, self).__init__()
-		self.sqrt_pi = math.sqrt(2 / math.pi)
+		self.sqrt_2_over_pi = math.sqrt(2 / math.pi)
 
 	@torch.jit.script_method
 	def forward(self, x):
-		return 0.5 * x * (1 + torch.tanh(self.sqrt_pi * (x + 0.044715 * torch.pow(x, 3))))
+		return 0.5 * x * (1 + torch.tanh(self.sqrt_2_over_pi * (x + 0.044715 * torch.pow(x, 3))))
 
 class MLP(torch.jit.ScriptModule):
 # class MLP(torch.nn.Module):
@@ -550,7 +591,7 @@ class TakeMean(torch.nn.Module):
 		lengths = lengths.to(padded_input.device)
 		out = torch.stack([seq[:l].mean(dim=0) for seq,l in zip(padded_input,lengths)])
 		out = torch.cat([out, lengths.float().view(-1,1)], dim=-1)
-		return out, None
+		return out
 
 	def pack_init_args(self):
 		return {}
@@ -561,7 +602,7 @@ class TakeMedian(torch.nn.Module):
 		lengths = lengths.to(padded_input.device)
 		out = torch.stack([seq[:l].median(dim=0)[0] for seq,l in zip(padded_input,lengths)])
 		out = torch.cat([out, lengths.float().view(-1,1)], dim=-1)
-		return out, None
+		return out
 
 	def pack_init_args(self):
 		return {}
@@ -578,7 +619,7 @@ class Resample(torch.nn.Module):
 		out = torch.stack([self.resample(seq[:l]) for seq,l in zip(padded_input,lengths)])
 		if not self.no_length:
 			out = torch.cat([out, lengths.float().view(-1,1)], dim=-1)
-		return out, None
+		return out
 
 	def resample(self, seq):
 		gcd = math.gcd(seq.size(0), self.num_samples)
