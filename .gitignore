@@ -9,6 +9,7 @@ data
 results
 wavenet_like
 clustering_context-dependent
+*/misc
 
 # Other irrelevant things
 *__pycache__*

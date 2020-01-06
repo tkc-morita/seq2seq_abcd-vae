@@ -49,7 +49,7 @@ def tsne(df, title=None, save_path=None, hue='label'):
 	df_pv.loc[:,hue] = pd.Categorical(df_pv[hue], categories=labels, ordered=True)
 	color_x_markers = [('C{color_ix}'.format(color_ix=color_ix),marker)
 						for marker,color_ix
-						in itertools.product(['o','v','s'],range(10))]
+						in itertools.product(['o','P','s','v','*','D','>','p','<','^'],range(10))]
 	label2color = {}
 	label2marker = {}
 	for ix,l in enumerate(labels):
@@ -76,7 +76,9 @@ if __name__ == "__main__":
 	parser.add_argument('-S','--save_dir', type=str, default=None, help='Path to the directory where figures are saved.')
 	parser.add_argument('-p', '--parameter', type=str, default=None, help='If given, use only the specified parameter.')
 	parser.add_argument('--hue_col', type=str, default='label', help='Name of column for hue.')
-	parser.add_argument('--ann_csv', type=str, default=None, help='Path to the annotation csv.')
+	parser.add_argument('--ann_csv', type=str, default=None, nargs='*', help='Path to the annotation csv.')
+	parser.add_argument('--wav_list', type=str, default=None, nargs='*', help='List of input wav files to be included.')
+	parser.add_argument('--single_result', action='store_true', help='If selected, do not split the results by wav files.')
 	args = parser.parse_args()
 
 	df = pd.read_csv(args.data)
@@ -90,17 +92,25 @@ if __name__ == "__main__":
 	# print(df.label.unique())
 	# df.loc[:,'label'] = pd.Categorical(df.label, categories=list('vxabcdefghijklmnopqrstuwyz'))
 
-	if not args.ann_csv is None:
-		df_ann = pd.read_csv(args.ann_csv).loc[:,['data_ix',args.hue_col]]
+	if args.ann_csv:
+		df_ann = pd.concat([pd.read_csv(path).loc[:,['data_ix',args.hue_col]]
+					for path in args.ann_csv],
+					axis=0)
 		df = df.merge(df_ann, how='left', on='data_ix')
 
 	if (not args.save_dir is None) and (not os.path.isdir(args.save_dir)):
 		os.makedirs(args.save_dir)
 	# plot_features(df)
 	# sub_df = df[df.input_path=='cut_b03.wav']
-	for path,sub_df in df.groupby('input_path'):
-		if args.save_dir is None:
-			save_path = None
-		else:
-			save_path = os.path.join(args.save_dir, os.path.splitext(path)[0] + '.png')
-		tsne(sub_df, title=path, save_path=save_path, hue=args.hue_col)
+	if not args.wav_list is None:
+		df = df[df.input_path.isin(args.wav_list)]
+	if args.single_result:
+		save_path = os.path.join(args.save_dir, 'all' + '.png')
+		tsne(df, title='all', save_path=save_path, hue=args.hue_col)
+	else:
+		for path,sub_df in df.groupby('input_path'):
+			if args.save_dir is None:
+				save_path = None
+			else:
+				save_path = os.path.join(args.save_dir, os.path.splitext(path)[0] + '.png')
+			tsne(sub_df, title=path, save_path=save_path, hue=args.hue_col)

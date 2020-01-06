@@ -290,7 +290,7 @@ class Learner(object):
 		self.encoder = model.RNN_Variational_Encoder(**checkpoint['encoder_init_parameters'])
 		self.feature_sampler = model.Sampler(**checkpoint['feature_sampler_init_parameters'])
 		self.decoder = model.RNN_Variational_Decoder(**checkpoint['decoder_init_parameters'])
-		self.encoder.load_state_dict(checkpoint['encoder'])
+		self.encoder.load_state_dict(checkpoint['encoder'], strict=False)
 		self.feature_sampler.load_state_dict(checkpoint['feature_sampler'])
 		self.decoder.load_state_dict(checkpoint['decoder'])
 		self.encoder.to(self.device)
@@ -307,7 +307,14 @@ class Learner(object):
 
 		self.gradient_clip = checkpoint['gradient_clip']
 		
-		torch.set_rng_state(checkpoint['random_state'])
+		try:
+			torch.set_rng_state(checkpoint['random_state'])
+		except RuntimeError:
+			msg = 'Failed to retrieve random_state.'
+			try:
+				logger.warning(msg)
+			except NameError:
+				print(msg)
 		if device=='cuda':
 			torch.cuda.set_rng_state_all(checkpoint['random_state_cuda'])
 		return checkpoint['epoch']
