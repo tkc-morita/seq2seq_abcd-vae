@@ -540,6 +540,7 @@ class DirichletCategoricalSampler(torch.nn.Module):
 			input_size,
 			mlp_hidden_size,
 			num_categories,
+			feature_dim,
 			prior_concentration=1.0,
 			min_temperature=1.0,
 			epoch_init_iter_counts=0,
@@ -566,6 +567,7 @@ class DirichletCategoricalSampler(torch.nn.Module):
 				requires_grad=True
 				)
 			)
+		self.category2features = torch.nn.Linear(num_categories,feature_dim)
 
 	def forward(self, parameter_seed):
 		"""
@@ -578,9 +580,11 @@ class DirichletCategoricalSampler(torch.nn.Module):
 	def sample(self, logits):
 		"""
 		Discrete sample z is approximated by a prob vector y from the Gumble-Softmax distribution.
+		y is then linear-transformed into a feature vector (cf. the codebook of VQ-VAE).
 		"""
 		sample = torch.nn.functional.gumbel_softmax(logits,tau=self.temperature)
-		return sample
+		features = self.category2features(sample)
+		return features
 
 	def kl_divergence(self, logits, entire_data_size):
 		"""
@@ -639,6 +643,7 @@ class DirichletCategoricalSampler(torch.nn.Module):
 			"input_size": self.to_logits.input_size,
 			"mlp_hidden_size": self.to_logits.hidden_size,
 			"num_categories": self.num_categories,
+			"feature_dim": self.category2features.out_features,
 			"prior_concentration": self.prior_concentration.item(),
 			"min_temperature": self.min_temperature,
 			"epoch_init_iter_counts": self.epoch_init_iter_counts,

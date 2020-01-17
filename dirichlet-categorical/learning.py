@@ -40,6 +40,7 @@ class Learner(object):
 			decoder_rnn_hidden_size,
 			mlp_hidden_size,
 			num_feature_categories,
+			feature_dim,
 			save_dir,
 			encoder_rnn_type='LSTM',
 			decoder_rnn_type='LSTM',
@@ -87,11 +88,11 @@ class Learner(object):
 				logger.info('encoder_hidden_dropout reset from {do} to 0.0.'.format(do=encoder_hidden_dropout))
 				encoder_hidden_dropout = 0.0
 			self.encoder = model.RNN_Variational_Encoder(input_size, encoder_rnn_hidden_size, rnn_type=encoder_rnn_type, rnn_layers=encoder_rnn_layers, hidden_dropout=encoder_hidden_dropout, bidirectional=bidirectional_encoder, esn_leak=esn_leak)
-			self.feature_sampler = model.DirichletCategoricalSampler(self.encoder.hidden_size_total, mlp_hidden_size, num_feature_categories, prior_concentration=prior_concentration)
-			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, num_feature_categories, emission_distr_name=emission_distribution, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder, right2left_weight=right2left_decoder_weight, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
-			logger.info('Data to be encoded by one of {} possible discrete values.'.format(num_feature_categories))
-			logger.info('Discrete features are assumed to be distributed according to Categorical(pi), with Dirichlet({}) prior on pi.'.format(prior_concentration))
-			logger.info('Conditioned on the features, data are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
+			self.feature_sampler = model.DirichletCategoricalSampler(self.encoder.hidden_size_total, mlp_hidden_size, num_feature_categories, feature_dim, prior_concentration=prior_concentration)
+			self.decoder = model.RNN_Variational_Decoder(input_size, decoder_rnn_hidden_size, mlp_hidden_size, feature_dim, emission_distr_name=emission_distribution, rnn_type=decoder_rnn_type, input_dropout=decoder_input_dropout, self_feedback=decoder_self_feedback, esn_leak=esn_leak, bidirectional=bidirectional_decoder, right2left_weight=right2left_decoder_weight, num_speakers=num_speakers, speaker_embed_dim=speaker_embed_dim)
+			logger.info('Data are encoded into one of {num_cat} possible {feature_dim}-dim feature vectors.'.format(num_cat=num_feature_categories,feature_dim=feature_dim))
+			logger.info('Discrete categories are assumed to be distributed according to Categorical(pi), with Dirichlet({}) prior on pi.'.format(prior_concentration))
+			logger.info('Conditioned on the RNN-transformed features, data are assumed to be distributed according to {emission_distribution}'.format(emission_distribution=emission_distribution))
 			logger.info('Random seed: {seed}'.format(seed = seed))
 			logger.info('Type of RNN used for the encoder: {rnn_type}'.format(rnn_type=encoder_rnn_type))
 			logger.info('Type of RNN used for the decoder: {rnn_type}'.format(rnn_type=decoder_rnn_type))
@@ -146,9 +147,9 @@ class Learner(object):
 			self.optimizer.zero_grad()
 
 			last_hidden = self.encoder(packed_input)
-			feature_params = self.feature_sampler(last_hidden)
-			features = self.feature_sampler.sample(feature_params)
-			kl_loss_per_batch = self.feature_sampler.kl_divergence(feature_params, num_strings)
+			category_logits = self.feature_sampler(last_hidden)
+			features = self.feature_sampler.sample(category_logits)
+			kl_loss_per_batch = self.feature_sampler.kl_divergence(category_logits, num_strings)
 			emission_loss_per_batch, end_prediction_loss_per_batch, _, _, _ = self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker, ground_truth_out=packed_input.data, ground_truth_offset=is_offset.data)
 
 			loss = emission_loss_per_batch + end_prediction_loss_per_batch + kl_loss_per_batch
@@ -167,7 +168,7 @@ class Learner(object):
 			kl_loss += kl_loss_per_batch.item()
 
 			with torch.no_grad():
-				clustering_probs = torch.nn.functional.softmax(features,-1)
+				clustering_probs = torch.nn.functional.softmax(category_logits,-1)
 				clustering_perplex = (-clustering_probs*clustering_probs.log()).sum(-1).mean().exp().item()
 				posterior_shape = torch.nn.functional.softmax(self.feature_sampler.posterior_shape_logits,-1)
 				posterior_shape_perplex = (-posterior_shape*posterior_shape.log()).sum().exp().item()
@@ -214,9 +215,9 @@ class Learner(object):
 				speaker = speaker.to(self.device)
 
 				last_hidden = self.encoder(packed_input)
-				feature_params = self.feature_sampler(last_hidden)
-				features = self.feature_sampler.sample(feature_params)
-				kl_loss += self.feature_sampler.kl_divergence(feature_params, num_strings).item()
+				category_logits = self.feature_sampler(last_hidden)
+				features = self.feature_sampler.sample(category_logits)
+				kl_loss += self.feature_sampler.kl_divergence(category_logits, num_strings).item()
 				emission_loss_per_batch, end_prediction_loss_per_batch, _, _, _ = self.decoder(features, batch_sizes=packed_input.batch_sizes, speaker=speaker, ground_truth_out=packed_input.data, ground_truth_offset=is_offset.data)
 				emission_loss += emission_loss_per_batch.item()
 				end_prediction_loss += end_prediction_loss_per_batch.item()
@@ -356,7 +357,8 @@ def get_parameters():
 	par_parser.add_argument('-p', '--patience', type=int, default=0, help='# of epochs before updating the learning rate.')
 	par_parser.add_argument('-R', '--encoder_rnn_type', type=str, default='LSTM', help='Name of RNN to be used for the encoder.')
 	par_parser.add_argument('--decoder_rnn_type', type=str, default=None, help='Name of RNN to be used for the decoder. Same as the encoder by default.')
-	par_parser.add_argument('-f', '--num_feature_categories', type=int, default=128, help='# of possible discrete values token on by latent features into which data are encoded.')
+	par_parser.add_argument('-K', '--num_feature_categories', type=int, default=128, help='# of possible discrete values token on by latent features into which data are encoded.')
+	par_parser.add_argument('-f', '--feature_dim', type=int, default=256, help='# of dimensions of features into which the discrete feature are linear-transformed.')
 	par_parser.add_argument('--encoder_rnn_layers', type=int, default=1, help='# of hidden layers in the encoder RNN.')
 	par_parser.add_argument('--encoder_rnn_hidden_size', type=int, default=256, help='# of the RNN units in the encoder RNN.')
 	par_parser.add_argument('--decoder_rnn_hidden_size', type=int, default=256, help='# of the RNN units in the decoder RNN.')
@@ -430,6 +432,7 @@ if __name__ == '__main__':
 				parameters.decoder_rnn_hidden_size,
 				parameters.mlp_hidden_size,
 				parameters.num_feature_categories,
+				parameters.feature_dim,
 				save_dir,
 				encoder_rnn_type=parameters.encoder_rnn_type,
 				decoder_rnn_type=parameters.decoder_rnn_type,
