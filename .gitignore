@@ -14,7 +14,7 @@ clustering
 context-dependent
 dirichlet-categorical
 misc
-articulartory-decoder
+articulatory-decoder
 supervised_topline
 
 # Other irrelevant things
