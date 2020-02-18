@@ -15,6 +15,7 @@ context-dependent
 dirichlet-categorical
 misc
 articulartory-decoder
+supervised_topline
 
 # Other irrelevant things
 *__pycache__*
