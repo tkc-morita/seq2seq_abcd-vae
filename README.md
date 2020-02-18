@@ -1,24 +1,22 @@
-# RNN Audio Variational Autoencoder
+# Seq2Seq Audio Variational Autoencoder
 
-This is a PyTorch-implementation of an RNN seq2seq variational autoencoder (RNN-VAE).
+This is a PyTorch-implementation of an RNN sequence-to-sequence variational autoencoder (seq2seq-VAE).
 
 ## Dependencies
 
 We tested the programs in the following environment:
-- (mini)conda 4.5.12
-- PyTorch 1.1
+- PyTorch 1.2
 
 ## Main Programs
 
 - `./`
-	- [`plain/`](./plain/): Code for autoencoding into a continuous feature space.
+	- [`plain/`](./plain/): Vanilla VAE with the Gaussian noise.
 		- [`learning.py`](./plain/learning.py): Execute learning.
 		- [`encode.py`](./plain/encode.py): Post-learning encoding.
 		- [`decode.py`](./plain/decode.py): Post-learning decoding.
-	- [`clustering/`](./clustering/): Code for network-internal clustering by GMM with Dirichlet prior.
-		- [`learning.py`](./clustering/learning.py): Execute learning.
-		- [`encode.py`](./clustering/encode.py): Post-learning encoding.
-		- [`decode.py`](./clustering/decode.py): Post-learning decoding.
+	- [`ABCD-VAE/`](./ABCD-VAE/): End-to-End clustering by the VAE with the Attention-Based Categorical sampling with the Dirichlet prior.
+		- [`learning.py`](./ABCD-VAE/learning.py): Execute learning.
+		- [`encode.py`](./ABCD-VAE/encode.py): Post-learning encoding.
 	- [`toy_data/`](./toy_data/): Toy data.
 		- `annotation_20170806-080002_89.2-94.22.csv`
 		- `20170806-080002_89.2-94.22.1ch.wav`
@@ -52,7 +50,7 @@ DESCRIPTION TO BE ADDED HERE.
 
 UNDER CONSTRUCTION.
 
-## TODOs
+<!-- ## TODOs
 
 - Check CUDA (10) compatibility.
-- Implement post-learning decoder.
+- Implement post-learning decoder. -->
