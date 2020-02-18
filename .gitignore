@@ -10,6 +10,11 @@ results
 wavenet_like
 clustering_context-dependent
 */misc
+clustering
+context-dependent
+dirichlet-categorical
+misc
+articulartory-decoder
 
 # Other irrelevant things
 *__pycache__*
