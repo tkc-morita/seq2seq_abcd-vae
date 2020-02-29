@@ -226,6 +226,10 @@ class Learner(object):
 		if self.retrieval:
 			initial_epoch = self.last_epoch + 1
 			logger.info('To be restarted from the beginning of epoch #: {epoch}'.format(epoch=initial_epoch))
+			self.optimizer = torch.optim.SGD(self.parameters(), lr=learning_rate, momentum=momentum)
+			self.optimizer.load_state_dict(self.checkpoint['optimizer'])
+			self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer)
+			self.lr_scheduler.load_state_dict(self.checkpoint['lr_scheduler'])
 		else:
 			self.optimizer = torch.optim.SGD(self.parameters(), lr=learning_rate, momentum=momentum)
 			self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, patience=patience)
@@ -285,14 +289,14 @@ class Learner(object):
 	def retrieve_model(self, checkpoint_path = None, device='cpu'):
 		if checkpoint_path is None:
 			checkpoint_path = os.path.join(self.save_dir, 'checkpoint.pt')
-		checkpoint = torch.load(checkpoint_path, map_location='cpu') # Random state needs to be loaded to CPU first even when cuda is available.
+		self.checkpoint = torch.load(checkpoint_path, map_location='cpu') # Random state needs to be loaded to CPU first even when cuda is available.
 
-		self.encoder = model.RNN_Variational_Encoder(**checkpoint['encoder_init_parameters'])
-		self.feature_sampler = model.Sampler(**checkpoint['feature_sampler_init_parameters'])
-		self.decoder = model.RNN_Variational_Decoder(**checkpoint['decoder_init_parameters'])
-		self.encoder.load_state_dict(checkpoint['encoder'], strict=False)
-		self.feature_sampler.load_state_dict(checkpoint['feature_sampler'])
-		self.decoder.load_state_dict(checkpoint['decoder'])
+		self.encoder = model.RNN_Variational_Encoder(**self.checkpoint['encoder_init_parameters'])
+		self.feature_sampler = model.Sampler(**self.checkpoint['feature_sampler_init_parameters'])
+		self.decoder = model.RNN_Variational_Decoder(**self.checkpoint['decoder_init_parameters'])
+		self.encoder.load_state_dict(self.checkpoint['encoder'], strict=False)
+		self.feature_sampler.load_state_dict(self.checkpoint['feature_sampler'])
+		self.decoder.load_state_dict(self.checkpoint['decoder'])
 		self.encoder.to(self.device)
 		self.feature_sampler.to(self.device)
 		self.decoder.to(self.device)
@@ -300,15 +304,15 @@ class Learner(object):
 
 		self.parameters = lambda:itertools.chain(self.encoder.parameters(), self.feature_sampler.parameters(), self.decoder.parameters())
 		self.optimizer = torch.optim.SGD(self.parameters(), lr=0.1)
-		self.optimizer.load_state_dict(checkpoint['optimizer'])
+		self.optimizer.load_state_dict(self.checkpoint['optimizer'])
 
 		self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer)
-		self.lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
+		self.lr_scheduler.load_state_dict(self.checkpoint['lr_scheduler'])
 
-		self.gradient_clip = checkpoint['gradient_clip']
+		self.gradient_clip = self.checkpoint['gradient_clip']
 		
 		try:
-			torch.set_rng_state(checkpoint['random_state'])
+			torch.set_rng_state(self.checkpoint['random_state'])
 		except RuntimeError:
 			msg = 'Failed to retrieve random_state.'
 			try:
@@ -316,8 +320,8 @@ class Learner(object):
 			except NameError:
 				print(msg)
 		if device=='cuda':
-			torch.cuda.set_rng_state_all(checkpoint['random_state_cuda'])
-		return checkpoint['epoch']
+			torch.cuda.set_rng_state_all(self.checkpoint['random_state_cuda'])
+		return self.checkpoint['epoch']
 
 
 

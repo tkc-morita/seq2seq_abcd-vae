@@ -8,10 +8,9 @@
 data
 results
 wavenet_like
-clustering_context-dependent
 */misc
 clustering
-context-dependent
+*context-dependent
 dirichlet-categorical
 misc
 articulatory-decoder
