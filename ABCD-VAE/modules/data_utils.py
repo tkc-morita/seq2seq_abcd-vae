@@ -6,8 +6,6 @@ import pandas as pd
 import numpy as np
 import scipy.io.wavfile as spw
 import os.path
-import warnings
-warnings.simplefilter("error")
 
 class Data_Parser(object):
 	def __init__(self,
