@@ -16,6 +16,10 @@ misc
 articulatory-decoder
 supervised_topline
 
+# unsupported
+VQ-VAE
+abc-VAE
+
 # Other irrelevant things
 *__pycache__*
 .vscode
