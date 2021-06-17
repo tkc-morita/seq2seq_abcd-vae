@@ -639,7 +639,7 @@ class ABCDSampler(torch.nn.Module):
 		return kl
 
 	def log_pmf(self, targets, logits):
-		return torch.nn.functional.cross_entropy(logits, target, reduction='sum')
+		return torch.nn.functional.cross_entropy(logits, targets, reduction='sum')
 
 	def increment_iter_counts(self):
 		self.iter_counts += 1
