@@ -15,6 +15,7 @@ dirichlet-categorical
 misc
 articulatory-decoder
 supervised_topline
+*/decode.py
 
 # unsupported
 VQ-VAE
