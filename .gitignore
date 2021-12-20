@@ -15,11 +15,12 @@ dirichlet-categorical
 misc
 articulatory-decoder
 supervised_topline
-*/decode.py
 
 # unsupported
 VQ-VAE
 abc-VAE
+*/decode.py
+*/encode_w_*_perturbation.py
 
 # Other irrelevant things
 *__pycache__*
