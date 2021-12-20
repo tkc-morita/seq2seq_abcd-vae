@@ -46,7 +46,7 @@ Two types of data are needed.
 ### Learning
 
 ```bash
-python ABCD-VAE/learning.py /path/to/directory/containing/wavs /path/to/segmentation.csv [options]
+python ABCD-VAE/learning.py /path/to/directory/containing/wavs /path/to/segmentation.csv -S /path/to/directory/to/save/results [options]
 ```
 
 e.g. Train on the toy data for 20 epoches and save the results in `./results/toy/run-1`.
@@ -77,8 +77,21 @@ Major options (values used in Morita et al, to appear, are in parentheses):
 ### Encoding
 
 ```bash
-python plain/encode.py /path/to/directory/containing/learning_results /path/to/directory/containing/wavs /path/to/segmentation.csv value_of_-N_in_learning [options]
+python ABCD-VAE/encode.py /path/to/training/checkpoint.pt /path/to/directory/containing/wavs /path/to/segmentation.csv value_of_-N_in_learning -S /path/to/class_probs.csv [options]
 ```
+
+where `value_of_-N_in_learning` must be the float value used for the `-N` option of `learning.py`.
+
+Major options:
+- `-S`: Path to the csv file in which results are saved.
+- `-b`: Batch size.
+- `-d`: Device to use. Choose `cuda` for GPU learning.
+- `--fft_frame_length`: Frame length of STFT in sec (0.008)
+- `--fft_step_size`: Step size (or stride) of STFT in sec (0.004)
+
+If you want pre-softmax classification logits, replace `ABCD-VAE/encode.py` with `ABCD-VAE/encode_logit.py`.
+
+If you want pre-logit feature vectors (whose scaled dot-product with the categories' feature vectors), replace `ABCD-VAE/encode.py` with `ABCD-VAE/encode_features.py`.
 
 ## Citations
 
