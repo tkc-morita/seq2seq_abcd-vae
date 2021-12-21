@@ -70,9 +70,10 @@ Major options (values used in Morita et al, to appear, are in parentheses):
 - `--decoder_rnn_hidden_size`: Dimensionality of hidden states in decoder RNN. (256)
 - `--mlp_hidden_size`: Dimensionality of hidden layers in MLP modules. (256)
 - `--speaker_embed_dim`: Dimensionality of speaker embeddings. (256)
-- `--pretrain_epochs` (only for ABCD-VAE): # of epochs during which ABCD-VAE feeds attention-weighted average of codebook vectors w/o Gumbel-Softmax sampling. (5)
-- `--fft_frame_length`: Frame length of STFT in sec (0.008)
-- `--fft_step_size`: Step size (or stride) of STFT in sec (0.004)
+- `--pretrain_epochs` (only for ABCD-VAE): # of epochs during which ABCD-VAE feeds attention-weighted. average of codebook vectors w/o Gumbel-Softmax sampling. (5)
+- `--fft_frame_length`: Frame length of STFT in sec. (0.008)
+- `--fft_step_size`: Step size (or stride) of STFT in sec. (0.004)
+- `--channel`: Channel index # (starting with 0) of multichannel recordings to be used. (NA, monaural)
 
 ### Encoding
 
@@ -88,6 +89,7 @@ Major options:
 - `-d`: Device to use. Choose `cuda` for GPU learning.
 - `--fft_frame_length`: Frame length of STFT in sec (0.008)
 - `--fft_step_size`: Step size (or stride) of STFT in sec (0.004)
+- `--channel`: Channel index # (starting with 0) of multichannel recording to be used. (NA, monaural)
 
 If you want pre-softmax classification logits, replace `ABCD-VAE/encode.py` with `ABCD-VAE/encode_logit.py`.
 
