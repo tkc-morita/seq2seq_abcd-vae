@@ -70,8 +70,8 @@ class Dataset(torch.utils.data.Dataset):
 		self.max_abs = 0.0
 		for input_path,sub_df in self.df_annotation.groupby('input_path'):
 			fs, _ = spw.read(os.path.join(self.input_root, input_path))
-			onset_ix = (sub_df.onset * fs).map(np.ceil)
-			offset_ix = (sub_df.offset * fs).map(np.floor)
+			onset_ix = (sub_df.onset * fs).round()
+			offset_ix = (sub_df.offset * fs).round()
 			self.df_annotation.loc[sub_df.index, 'onset_ix'] = onset_ix
 			self.df_annotation.loc[sub_df.index, 'offset_ix'] = offset_ix
 		self.df_annotation.loc[:, 'onset_ix'] = self.df_annotation.loc[:, 'onset_ix'].astype(int)
