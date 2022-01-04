@@ -2,6 +2,9 @@
 
 This is a PyTorch-implementation of the sequence-to-sequence variational autoencoder that classifies audio segments (of variable length) into discrete categories based on the Attention-Based Categorical sampling with the Dirichlet prior (seq2seq ABCD-VAE).
 
+Codes will be updated occasionally for compatibility with new data.
+To reproduce the clustering of birdsong syllables in [Morita et al. (2021)](#citations), use the version tagged as "publication".
+
 ## Dependencies
 
 We tested the programs in the following environment:
@@ -98,7 +101,7 @@ If you want pre-logit feature vectors (whose scaled dot-product with the categor
 ## Citations
 
 Please cite the following works when you refer to the ABCD-VAE.
-- Morita, T., Koda, H., Okanoya, K., & Tachibana, R. O. (To appear) Measuring context dependency in birdsong using artificial neural networks. PLOS Computational Biology. ([Preprint available here](https://doi.org/10.1101/2020.05.09.083907))
+- Morita, T., Koda, H., Okanoya, K., & Tachibana, R. O. (2021) Measuring context dependency in birdsong using artificial neural networks. PLOS Computational Biology. [DOI:10.1371/journal.pcbi.1009707](http://dx.doi.org/10.1371/journal.pcbi.1009707) ([Preprint available here](https://doi.org/10.1101/2020.05.09.083907))
 - Morita, T. & Koda, H. (2020) Exploring TTS without T Using Biologically/Psychologically Motivated Neural Network Modules (ZeroSpeech 2020). *In* Proceedings of Interspeech 2020. 4856-4860. [DOI:10.21437/Interspeech.2020-3127](http://dx.doi.org/10.21437/Interspeech.2020-3127).
 
 
